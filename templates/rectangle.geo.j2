@@ -1,0 +1,48 @@
+// GMSH Geometry File
+// Auto-generated from: {{ model_name }}
+{% if description %}// Description: {{ description }}{% endif %}
+// Element size: {{ mesh_size }}
+
+SetFactory("OpenCASCADE");
+
+// Parameters
+length = {{ length }};
+height = {{ height }};
+mesh_size = {{ mesh_size }};
+
+// Points
+Point(1) = {0, 0, 0, mesh_size};
+Point(2) = {length, 0, 0, mesh_size};
+Point(3) = {length, height, 0, mesh_size};
+Point(4) = {0, height, 0, mesh_size};
+
+// Lines
+Line(1) = {1, 2};  // bottom
+Line(2) = {2, 3};  // right
+Line(3) = {3, 4};  // top
+Line(4) = {4, 1};  // left
+
+// Surface
+Line Loop(1) = {1, 2, 3, 4};
+Plane Surface(1) = {1};
+
+// Physical Groups
+{% if layers %}
+// Multi-material layers (surfaces will be defined separately)
+{% else %}
+Physical Surface("{{ material_name }}", {{ material_id }}) = {1};
+{% endif %}
+
+{% for bc in boundary_conditions %}
+Physical Line("{{ bc.name }}", {{ bc.physical_id }}) = {{ "{" }}{{ bc.line_ids | join(", ") }}{{ "}" }};
+{% endfor %}
+
+{% for load in loads %}
+Physical Line("{{ load.name }}", {{ load.physical_id }}) = {{ "{" }}{{ load.line_ids | join(", ") }}{{ "}" }};
+{% endfor %}
+
+// Mesh generation
+{% if mesh_algorithm %}
+Mesh.Algorithm = {{ mesh_algorithm }};
+{% endif %}
+Mesh 2;

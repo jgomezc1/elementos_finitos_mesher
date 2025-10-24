@@ -1,0 +1,20 @@
+model_name: lshape_beam
+geometry:
+  type: lshape
+  width: 3.0
+  height: 3.0
+  flange_width: 1.0
+  flange_height: 1.0
+mesh:
+  size: 0.1
+  element_type: triangle
+material:
+  E: 210000000000.0
+  nu: 0.3
+boundary_conditions:
+- name: bc_bottom
+  location: bottom
+  physical_id: 100
+  constraints:
+    x: fixed
+    y: fixed

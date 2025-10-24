@@ -1,0 +1,50 @@
+model_name: layered_plate
+description: Two-layer plate with different materials
+
+geometry:
+  type: rectangle
+  length: 2.0
+  height: 1.0
+
+mesh:
+  size: 0.1
+  element_type: triangle
+
+layers:
+  - name: lower_layer
+    region: [0.0, 0.5]
+    physical_id: 1
+    material:
+      E: 1.0e6
+      nu: 0.3
+
+  - name: upper_layer
+    region: [0.5, 1.0]
+    physical_id: 2
+    material:
+      E: 2.0e6
+      nu: 0.3
+
+boundary_conditions:
+  - name: lateral_support
+    location: left
+    physical_id: 300
+    constraints:
+      x: fixed
+      y: free
+
+  - name: bottom_support
+    location: bottom
+    physical_id: 400
+    constraints:
+      x: free
+      y: fixed
+
+loads:
+  - name: top_pressure
+    location: top
+    physical_id: 500
+    force:
+      x: 0.0
+      y: -2.0
+    distribution: uniform

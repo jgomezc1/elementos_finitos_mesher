@@ -1,0 +1,32 @@
+model_name: simple_cantilever
+description: Simple cantilever beam under load
+
+geometry:
+  type: rectangle
+  length: 4.0
+  height: 1.0
+
+mesh:
+  size: 0.1
+  element_type: triangle
+
+material:
+  E: 2.1e11
+  nu: 0.3
+
+boundary_conditions:
+  - name: fixed_end
+    location: left
+    physical_id: 100
+    constraints:
+      x: fixed
+      y: fixed
+
+loads:
+  - name: tip_load
+    location: right
+    physical_id: 200
+    force:
+      x: 0.0
+      y: -1000.0
+    distribution: uniform

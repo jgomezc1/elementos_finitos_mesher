@@ -1,0 +1,31 @@
+model_name: PlateWithHole
+description: ''
+geometry:
+  type: plate_with_hole
+  length: 4.0
+  height: 2.0
+  hole_x: 2.0
+  hole_y: 1.0
+  hole_radius: 0.3
+mesh:
+  size: 0.05
+  element_type: triangle
+  algorithm: null
+material:
+  E: 210000000000.0
+  nu: 0.3
+boundary_conditions:
+- name: bc_1
+  location: left
+  physical_id: 100
+  constraints:
+    x: fixed
+    y: fixed
+loads:
+- name: load_1
+  location: right
+  physical_id: 200
+  force:
+    x: 0.0
+    y: -1000.0
+  distribution: uniform
