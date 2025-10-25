@@ -14,6 +14,7 @@ import numpy as np
 from pathlib import Path
 import tempfile
 import os
+import subprocess
 
 from fem_config import FEMConfig
 from fem_converter import FEMConverter
@@ -365,16 +366,21 @@ def main():
 
         page = st.radio(
             "Choose a page:",
-            ["🏗️ Model Builder", "📚 Load Example", "ℹ️ About"],
+            ["🏗️ Model Builder", "📂 Load GEO File", "📚 Load Example", "ℹ️ About"],
             index=0
         )
 
         st.markdown("---")
         st.markdown("### Quick Tips")
-        st.info("💡 Start by selecting a geometry type\n\n📐 Adjust parameters in real-time\n\n🔒 Add boundary conditions\n\n⚡ Define loads\n\n✅ Generate your model!")
+        if page == "📂 Load GEO File":
+            st.info("💡 Upload your .geo file\n\n🔧 Define materials for physical groups\n\n🔒 Set boundary conditions\n\n⚡ Add loads\n\n✅ Generate mesh!")
+        else:
+            st.info("💡 Start by selecting a geometry type\n\n📐 Adjust parameters in real-time\n\n🔒 Add boundary conditions\n\n⚡ Define loads\n\n✅ Generate your model!")
 
     if page == "🏗️ Model Builder":
         show_model_builder()
+    elif page == "📂 Load GEO File":
+        show_geo_loader()
     elif page == "📚 Load Example":
         show_examples()
     else:
@@ -656,6 +662,455 @@ def show_model_builder():
 
                     except Exception as e:
                         st.error(f"❌ Error saving files: {str(e)}")
+
+
+def show_geo_loader():
+    """Show the GEO file loader interface"""
+    st.markdown('<p class="section-header">📂 Load External GEO File</p>', unsafe_allow_html=True)
+
+    st.markdown("""
+    This feature allows you to:
+    - Upload an existing GMSH .geo file (created externally)
+    - Define material properties for physical groups
+    - Set boundary conditions and loads
+    - Generate mesh and convert to SolidsPy format
+
+    **Use case:** When you've created complex geometry in GMSH but want to use the GUI for the rest of the workflow.
+    """)
+
+    st.markdown("---")
+
+    # Model name
+    st.markdown('<p class="section-header">📝 Model Information</p>', unsafe_allow_html=True)
+    model_name = st.text_input("Model Name", value="geo_model", help="Name for your model")
+
+    st.markdown("---")
+
+    # File upload or selection
+    st.markdown('<p class="section-header">📁 Select GEO File</p>', unsafe_allow_html=True)
+
+    col1, col2 = st.columns(2)
+
+    with col1:
+        st.markdown("**Option 1: Upload File**")
+        uploaded_file = st.file_uploader("Upload .geo file", type=['geo'])
+
+    with col2:
+        st.markdown("**Option 2: Select from templates/**")
+        # List .geo files in templates folder
+        templates_path = Path("templates")
+        if templates_path.exists():
+            geo_files = list(templates_path.glob("*.geo"))
+            geo_file_names = [f.name for f in geo_files]
+            if geo_file_names:
+                selected_template = st.selectbox("Choose template:", [""] + geo_file_names)
+            else:
+                st.info("No .geo files found in templates/")
+                selected_template = ""
+        else:
+            st.info("templates/ folder not found")
+            selected_template = ""
+
+    # Load the GEO content
+    geo_content = None
+    geo_filename = None
+
+    if uploaded_file is not None:
+        geo_content = uploaded_file.read().decode('utf-8')
+        geo_filename = uploaded_file.name
+        st.success(f"✅ Loaded: {geo_filename}")
+    elif selected_template:
+        geo_path = templates_path / selected_template
+        with open(geo_path, 'r') as f:
+            geo_content = f.read()
+        geo_filename = selected_template
+        st.success(f"✅ Loaded: {geo_filename}")
+
+    if geo_content:
+        st.markdown("---")
+        st.markdown('<p class="section-header">👁️ GEO File Preview</p>', unsafe_allow_html=True)
+
+        with st.expander("View GEO content", expanded=False):
+            st.code(geo_content, language="text")
+
+        st.markdown("---")
+
+        # Extract physical groups info from GEO file
+        st.markdown('<p class="section-header">📊 Physical Groups Detected</p>', unsafe_allow_html=True)
+
+        # Parse physical groups from GEO content
+        import re
+
+        # Try both formats:
+        # Format 1: Physical Surface("name", id) - with optional name
+        # Format 2: Physical Surface(id) = {...}; - GMSH standard format
+
+        phys_surfaces = []
+        phys_lines = []
+
+        # Format 1: Physical Surface("name", id) or Physical Surface(name, id)
+        surfaces_fmt1 = re.findall(r'Physical\s+Surface\s*\(\s*"?([^"]*)"?\s*,\s*(\d+)\s*\)', geo_content)
+        for name, pid in surfaces_fmt1:
+            phys_surfaces.append((name, pid))
+
+        lines_fmt1 = re.findall(r'Physical\s+Line\s*\(\s*"?([^"]*)"?\s*,\s*(\d+)\s*\)', geo_content)
+        for name, pid in lines_fmt1:
+            phys_lines.append((name, pid))
+
+        # Format 2: Physical Surface(id) = {...};
+        surfaces_fmt2 = re.findall(r'Physical\s+Surface\s*\(\s*(\d+)\s*\)\s*=', geo_content)
+        for pid in surfaces_fmt2:
+            # Generate default name if not already found
+            if not any(p == pid for _, p in phys_surfaces):
+                phys_surfaces.append((f"Surface_{pid}", pid))
+
+        lines_fmt2 = re.findall(r'Physical\s+Line\s*\(\s*(\d+)\s*\)\s*=', geo_content)
+        for pid in lines_fmt2:
+            # Generate default name if not already found
+            if not any(p == pid for _, p in phys_lines):
+                phys_lines.append((f"Line_{pid}", pid))
+
+        if phys_surfaces:
+            st.markdown("**Physical Surfaces (for materials):**")
+            for name, pid in phys_surfaces:
+                st.markdown(f"- ID {pid}: {name if name else 'unnamed'}")
+
+        if phys_lines:
+            st.markdown("**Physical Lines (for BCs/loads):**")
+            for name, pid in phys_lines:
+                st.markdown(f"- ID {pid}: {name if name else 'unnamed'}")
+
+        st.markdown("---")
+
+        # Material properties
+        st.markdown('<p class="section-header">🔧 Material Properties</p>', unsafe_allow_html=True)
+
+        if phys_surfaces:
+            st.info(f"Define material properties for {len(phys_surfaces)} physical surface(s)")
+            materials = []
+
+            for name, pid in phys_surfaces:
+                st.markdown(f"**Physical Surface ID {pid}: {name if name else 'unnamed'}**")
+                col1, col2 = st.columns(2)
+                with col1:
+                    E = st.number_input(f"Young's Modulus (Pa)", value=2.1e11, format="%.2e", key=f"E_{pid}")
+                with col2:
+                    nu = st.number_input(f"Poisson's Ratio", min_value=0.0, max_value=0.49, value=0.3, step=0.01, format="%.3f", key=f"nu_{pid}")
+
+                materials.append({
+                    'physical_id': int(pid),
+                    'name': name if name else f'material_{pid}',
+                    'E': E,
+                    'nu': nu
+                })
+                st.divider()
+        else:
+            st.warning("⚠️ No Physical Surfaces found in GEO file. Add Physical Surface definitions to specify materials.")
+            materials = []
+
+        # Boundary conditions
+        st.markdown('<p class="section-header">🔒 Boundary Conditions</p>', unsafe_allow_html=True)
+
+        num_bcs = st.number_input("Number of Boundary Conditions", min_value=0, max_value=20, value=0, step=1)
+
+        bcs = []
+        for i in range(num_bcs):
+            st.markdown(f"**BC {i+1}**")
+            col1, col2, col3 = st.columns(3)
+
+            with col1:
+                bc_name = st.text_input("Name", value=f"bc_{i+1}", key=f"bc_name_geo_{i}")
+                bc_phys_id = st.number_input("Physical Line ID", min_value=1, value=100+i, step=1, key=f"bc_phys_geo_{i}")
+
+            with col2:
+                x_constraint = st.selectbox("X Constraint", ["free", "fixed"], key=f"bc_x_geo_{i}")
+
+            with col3:
+                y_constraint = st.selectbox("Y Constraint", ["free", "fixed"], key=f"bc_y_geo_{i}")
+
+            bcs.append({
+                'name': bc_name,
+                'physical_id': int(bc_phys_id),
+                'constraints': {'x': x_constraint, 'y': y_constraint}
+            })
+            st.divider()
+
+        # Loads
+        st.markdown('<p class="section-header">⚡ Loads</p>', unsafe_allow_html=True)
+
+        num_loads = st.number_input("Number of Loads", min_value=0, max_value=20, value=0, step=1)
+
+        loads = []
+        for i in range(num_loads):
+            st.markdown(f"**Load {i+1}**")
+            col1, col2, col3 = st.columns(3)
+
+            with col1:
+                load_name = st.text_input("Name", value=f"load_{i+1}", key=f"load_name_geo_{i}")
+                load_phys_id = st.number_input("Physical Line ID", min_value=1, value=200+i, step=1, key=f"load_phys_geo_{i}")
+
+            with col2:
+                fx = st.number_input("Force X (N)", value=0.0, format="%.2f", key=f"load_fx_geo_{i}")
+
+            with col3:
+                fy = st.number_input("Force Y (N)", value=-1000.0, format="%.2f", key=f"load_fy_geo_{i}")
+
+            loads.append({
+                'name': load_name,
+                'physical_id': int(load_phys_id),
+                'force': {'x': fx, 'y': fy},
+                'distribution': 'uniform'
+            })
+            st.divider()
+
+        # Mesh settings
+        st.markdown('<p class="section-header">🔲 Mesh Settings</p>', unsafe_allow_html=True)
+
+        col1, col2 = st.columns(2)
+        with col1:
+            mesh_size = st.number_input("Mesh Size (m)", min_value=0.001, value=0.1, step=0.01, format="%.3f")
+        with col2:
+            element_type = st.selectbox(
+                "Element Type",
+                options=["triangle", "quad"],
+                index=0,
+                help="Triangle for standard meshes, Quad if GEO file uses 'Recombine Surface'"
+            )
+
+        st.markdown("---")
+
+        # Generate button
+        col1, col2, col3 = st.columns([1, 2, 1])
+        with col2:
+            if st.button("🚀 Generate Mesh and Convert", use_container_width=True):
+                try:
+                    with st.spinner("Processing..."):
+                        with tempfile.TemporaryDirectory() as tmpdir:
+                            # Save GEO file
+                            geo_path = Path(tmpdir) / f"{model_name}.geo"
+                            with open(geo_path, 'w') as f:
+                                f.write(geo_content)
+
+                            # Run GMSH
+                            from fem_converter import FEMConverter
+                            converter = FEMConverter.__new__(FEMConverter)
+                            gmsh_exe = converter._find_gmsh()
+
+                            if not gmsh_exe:
+                                st.error("❌ GMSH executable not found")
+                                raise FileNotFoundError("GMSH not found")
+
+                            msh_path = Path(tmpdir) / f"{model_name}.msh"
+                            result = subprocess.run(
+                                [gmsh_exe, str(geo_path), "-2", "-o", str(msh_path)],
+                                capture_output=True,
+                                text=True
+                            )
+
+                            if result.returncode != 0:
+                                st.error(f"❌ GMSH Error: {result.stderr}")
+                                raise RuntimeError("GMSH failed")
+
+                            # Read mesh
+                            import meshio
+                            mesh = meshio.read(str(msh_path))
+                            points = mesh.points
+                            cells = mesh.cells
+                            cell_data = mesh.cell_data
+
+                            # Convert nodes
+                            import preprocesor as msh_proc
+                            nodes_array = msh_proc.node_writer(points, mesh.point_data)
+
+                            # Convert elements
+                            # Map element type to SolidsPy element ID
+                            ele_type_map = {
+                                'triangle': 3,
+                                'quad': 2
+                            }
+                            ele_type_id = ele_type_map[element_type]
+
+                            # For multiple materials
+                            elements_list = []
+                            nini = 0
+
+                            for mat in materials:
+                                nf, layer_els = msh_proc.ele_writer(
+                                    cells, cell_data,
+                                    element_type,
+                                    mat['physical_id'],
+                                    ele_type_id,
+                                    mat['physical_id'],
+                                    nini
+                                )
+                                elements_list.append(layer_els)
+                                nini = nf
+
+                            if elements_list:
+                                elements_array = np.vstack(elements_list)
+                            else:
+                                st.error("❌ No elements extracted. Check physical surface IDs.")
+                                raise ValueError("No elements")
+
+                            # Apply boundary conditions
+                            for bc in bcs:
+                                bc_x = -1 if bc['constraints']['x'] == "fixed" else 0
+                                bc_y = -1 if bc['constraints']['y'] == "fixed" else 0
+                                nodes_array = msh_proc.boundary_conditions(
+                                    cells, cell_data,
+                                    bc['physical_id'],
+                                    nodes_array,
+                                    bc_x, bc_y
+                                )
+
+                            # Apply loads
+                            loads_array = None
+                            if loads:
+                                loads_list = []
+                                for load in loads:
+                                    load_array = msh_proc.loading(
+                                        cells, cell_data,
+                                        load['physical_id'],
+                                        load['force']['x'],
+                                        load['force']['y']
+                                    )
+                                    loads_list.append(load_array)
+
+                                if loads_list:
+                                    loads_array = np.vstack(loads_list)
+
+                            # Create materials array
+                            materials_array = np.zeros((len(materials), 3))
+                            for i, mat in enumerate(materials):
+                                materials_array[i, 0] = mat['E']
+                                materials_array[i, 1] = mat['nu']
+                                materials_array[i, 2] = 0.0
+
+                            # Save to strings
+                            from io import StringIO
+
+                            nodes_str = StringIO()
+                            np.savetxt(nodes_str, nodes_array, fmt=("%d", "%.4f", "%.4f", "%d", "%d"))
+
+                            eles_str = StringIO()
+                            fmt_elements = ["%d", "%d", "%d"] + ["%d"] * (elements_array.shape[1] - 3)
+                            np.savetxt(eles_str, elements_array, fmt=fmt_elements)
+
+                            mater_str = StringIO()
+                            np.savetxt(mater_str, materials_array, fmt="%.6e")
+
+                            loads_str = None
+                            if loads_array is not None:
+                                loads_io = StringIO()
+                                np.savetxt(loads_io, loads_array, fmt=("%d", "%.6f", "%.6f"))
+                                loads_str = loads_io.getvalue()
+
+                            # Read GEO and MSH files
+                            msh_content = msh_path.read_text()
+
+                            st.session_state.output_files = {
+                                'geo': geo_content,
+                                'msh': msh_content,
+                                'nodes': nodes_str.getvalue(),
+                                'eles': eles_str.getvalue(),
+                                'mater': mater_str.getvalue(),
+                                'loads': loads_str
+                            }
+                            st.session_state.conversion_complete = True
+                            st.session_state.model_name_geo = model_name
+
+                    st.success("✅ Conversion complete!")
+
+                except Exception as e:
+                    st.error(f"❌ Error: {str(e)}")
+                    import traceback
+                    st.code(traceback.format_exc())
+
+        # Show output
+        if st.session_state.get('conversion_complete', False) and 'model_name_geo' in st.session_state:
+            st.markdown("---")
+            st.markdown('<p class="section-header">✅ Output Files</p>', unsafe_allow_html=True)
+
+            tab1, tab2, tab3, tab4, tab5 = st.tabs(["nodes.txt", "eles.txt", "mater.txt", "loads.txt", "mesh"])
+
+            with tab1:
+                st.code(st.session_state.output_files['nodes'], language="text")
+                st.download_button("Download nodes.txt", st.session_state.output_files['nodes'], "nodes.txt", key="dl_nodes_geo")
+
+            with tab2:
+                st.code(st.session_state.output_files['eles'], language="text")
+                st.download_button("Download eles.txt", st.session_state.output_files['eles'], "eles.txt", key="dl_eles_geo")
+
+            with tab3:
+                st.code(st.session_state.output_files['mater'], language="text")
+                st.download_button("Download mater.txt", st.session_state.output_files['mater'], "mater.txt", key="dl_mater_geo")
+
+            with tab4:
+                if st.session_state.output_files.get('loads'):
+                    st.code(st.session_state.output_files['loads'], language="text")
+                    st.download_button("Download loads.txt", st.session_state.output_files['loads'], "loads.txt", key="dl_loads_geo")
+                else:
+                    st.info("No loads defined")
+
+            with tab5:
+                st.info(f"MSH file: {len(st.session_state.output_files['msh'])} bytes")
+                st.download_button("Download .msh file", st.session_state.output_files['msh'], f"{model_name}.msh", key="dl_msh_geo")
+
+            # Save all files
+            st.markdown("---")
+            st.markdown('<p class="section-header">💾 Save All Files to Local Folder</p>', unsafe_allow_html=True)
+
+            col1, col2, col3 = st.columns([2, 2, 1])
+
+            with col1:
+                file_prefix = st.text_input("File Prefix", value=model_name, key="prefix_geo")
+
+            with col2:
+                output_folder = st.text_input("Output Folder", value="./output", key="folder_geo")
+
+            with col3:
+                st.write("")
+                st.write("")
+                if st.button("💾 Save All Files", key="save_geo"):
+                    try:
+                        output_path = Path(output_folder)
+                        output_path.mkdir(parents=True, exist_ok=True)
+
+                        files_saved = []
+
+                        # Save GEO
+                        geo_file = output_path / f"{file_prefix}.geo"
+                        with open(geo_file, 'w') as f:
+                            f.write(st.session_state.output_files['geo'])
+                        files_saved.append(str(geo_file))
+
+                        # Save MSH
+                        msh_file = output_path / f"{file_prefix}.msh"
+                        with open(msh_file, 'w') as f:
+                            f.write(st.session_state.output_files['msh'])
+                        files_saved.append(str(msh_file))
+
+                        # Save TXT files
+                        for name in ['nodes', 'eles', 'mater']:
+                            txt_file = output_path / f"{file_prefix}{name}.txt"
+                            with open(txt_file, 'w') as f:
+                                f.write(st.session_state.output_files[name])
+                            files_saved.append(str(txt_file))
+
+                        if st.session_state.output_files.get('loads'):
+                            loads_file = output_path / f"{file_prefix}loads.txt"
+                            with open(loads_file, 'w') as f:
+                                f.write(st.session_state.output_files['loads'])
+                            files_saved.append(str(loads_file))
+
+                        st.success(f"✅ All {len(files_saved)} files saved to: `{output_folder}/`")
+
+                        st.markdown("**Files created:**")
+                        for file_path in files_saved:
+                            st.markdown(f"- `{file_path}`")
+
+                    except Exception as e:
+                        st.error(f"❌ Error: {str(e)}")
 
 
 def show_examples():
