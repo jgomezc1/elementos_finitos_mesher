@@ -143,13 +143,13 @@ class FEMConverter:
             elements_list = []
             nini = 0
 
-            for layer in self.config.layers:
+            for mat_idx, layer in enumerate(self.config.layers):
                 nf, layer_els = msh.ele_writer(
                     cells, cell_data,
                     self.config.mesh.element_type,
-                    layer.physical_id,
+                    layer.physical_id,  # Physical surface ID from GMSH
                     ele_type,
-                    layer.physical_id,  # Use physical_id as material ID
+                    mat_idx,  # Material tag = row index in mater.txt (0, 1, 2, ...)
                     nini
                 )
                 elements_list.append(layer_els)

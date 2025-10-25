@@ -934,13 +934,13 @@ def show_geo_loader():
                             elements_list = []
                             nini = 0
 
-                            for mat in materials:
+                            for mat_idx, mat in enumerate(materials):
                                 nf, layer_els = msh_proc.ele_writer(
                                     cells, cell_data,
                                     element_type,
-                                    mat['physical_id'],
+                                    mat['physical_id'],  # Physical surface ID from GMSH
                                     ele_type_id,
-                                    mat['physical_id'],
+                                    mat_idx,              # Material tag = row index in mater.txt (0, 1, 2, ...)
                                     nini
                                 )
                                 elements_list.append(layer_els)
