@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-FEM Model Builder - Streamlit GUI
-----------------------------------
+SolidsPy based FEM Builder - Streamlit GUI
+-------------------------------------------
 
 Interactive web interface for creating finite element models.
 
@@ -51,7 +51,7 @@ except Exception as e:
 
 # Page configuration
 st.set_page_config(
-    page_title="FEM Model Builder",
+    page_title="SolidsPy based FEM Builder",
     page_icon="🔧",
     layout="wide",
     initial_sidebar_state="expanded"
@@ -586,7 +586,7 @@ def display_solver_results(results):
         disp_mag = np.sqrt(disp[:, 0]**2 + disp[:, 1]**2)
 
         # Create tabs for different result types
-        tab1, tab2, tab3 = st.tabs(["🔵 Displacements", "🟢 Strains", "🔴 Stresses"])
+        tab1, tab2, tab3, tab4 = st.tabs(["🔵 Displacements", "🟢 Strains", "🔴 Stresses", "🟣 Principal Stresses"])
 
         with tab1:
             st.markdown("### Displacement Fields")
@@ -703,6 +703,55 @@ def display_solver_results(results):
                 )
                 st.plotly_chart(fig, use_container_width=True)
 
+        with tab4:
+            st.markdown("### Principal Stresses")
+
+            # Calculate principal stresses
+            # For 2D plane stress: σ1, σ2 = (σxx + σyy)/2 ± sqrt(((σxx - σyy)/2)^2 + τxy^2)
+            sigma_xx = stresses[:, 0]
+            sigma_yy = stresses[:, 1]
+            tau_xy = stresses[:, 2]
+
+            sigma_avg = (sigma_xx + sigma_yy) / 2
+            R = np.sqrt(((sigma_xx - sigma_yy) / 2)**2 + tau_xy**2)
+
+            sigma_1 = sigma_avg + R  # Maximum principal stress
+            sigma_2 = sigma_avg - R  # Minimum principal stress
+            tau_max = R              # Maximum shear stress = (σ1 - σ2)/2
+
+            # Sub-tabs for principal stress components
+            subtab1, subtab2, subtab3 = st.tabs(["σ₁ (Max Principal)", "σ₂ (Min Principal)", "τmax (Max Shear)"])
+
+            with subtab1:
+                fig = create_interactive_contour_plot(
+                    nodes, elements, sigma_1,
+                    "Maximum Principal Stress (σ₁)",
+                    "σ₁ (Pa)",
+                    height=700
+                )
+                st.plotly_chart(fig, use_container_width=True)
+                st.info(f"💡 Max σ₁: {np.max(sigma_1):.3e} Pa ({np.max(sigma_1)/1e6:.2f} MPa) | Min σ₁: {np.min(sigma_1):.3e} Pa ({np.min(sigma_1)/1e6:.2f} MPa)")
+
+            with subtab2:
+                fig = create_interactive_contour_plot(
+                    nodes, elements, sigma_2,
+                    "Minimum Principal Stress (σ₂)",
+                    "σ₂ (Pa)",
+                    height=700
+                )
+                st.plotly_chart(fig, use_container_width=True)
+                st.info(f"💡 Max σ₂: {np.max(sigma_2):.3e} Pa ({np.max(sigma_2)/1e6:.2f} MPa) | Min σ₂: {np.min(sigma_2):.3e} Pa ({np.min(sigma_2)/1e6:.2f} MPa)")
+
+            with subtab3:
+                fig = create_interactive_contour_plot(
+                    nodes, elements, tau_max,
+                    "Maximum Shear Stress (τmax)",
+                    "τmax (Pa)",
+                    height=700
+                )
+                st.plotly_chart(fig, use_container_width=True)
+                st.info(f"💡 Max τmax: {np.max(tau_max):.3e} Pa ({np.max(tau_max)/1e6:.2f} MPa)")
+
     except Exception as e:
         st.error(f"❌ Error generating interactive plots: {str(e)}")
         st.info("Field data is available in the results, but visualization failed.")
@@ -720,7 +769,7 @@ def main():
     initialize_session_state()
 
     # Header
-    st.markdown('<p class="main-header">🔧 FEM Model Builder</p>', unsafe_allow_html=True)
+    st.markdown('<p class="main-header">🔧 SolidsPy based FEM Builder</p>', unsafe_allow_html=True)
     st.markdown("---")
 
     # Sidebar
@@ -1774,10 +1823,10 @@ def show_examples():
 
 def show_about():
     """Show about page"""
-    st.markdown('<p class="section-header">ℹ️ About FEM Model Builder</p>', unsafe_allow_html=True)
+    st.markdown('<p class="section-header">ℹ️ About SolidsPy based FEM Builder</p>', unsafe_allow_html=True)
 
     st.markdown("""
-    ### Welcome to the FEM Model Builder!
+    ### Welcome to the SolidsPy based FEM Builder!
 
     This interactive tool helps you create finite element models without writing code.
 
