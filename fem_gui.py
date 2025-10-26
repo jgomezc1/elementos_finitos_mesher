@@ -15,10 +15,38 @@ from pathlib import Path
 import tempfile
 import os
 import subprocess
+import sys
+
+# Add SolidsPy to path
+# Get the directory where this script is located
+script_dir = os.path.dirname(os.path.abspath(__file__))
+solidspy_path = os.path.join(script_dir, "solidspy")
+if os.path.exists(solidspy_path):
+    sys.path.insert(0, solidspy_path)
+else:
+    # Fallback: try using current working directory
+    solidspy_path_cwd = os.path.join(os.getcwd(), "solidspy")
+    if os.path.exists(solidspy_path_cwd):
+        sys.path.insert(0, solidspy_path_cwd)
 
 from fem_config import FEMConfig
 from fem_converter import FEMConverter
 from fem_templates import RectangularPlate, LayeredPlate, LShapeBeam, PlateWithHole
+
+# SolidsPy imports (will be used for solver)
+SOLIDSPY_AVAILABLE = False
+SOLIDSPY_ERROR = None
+try:
+    import assemutil as ass
+    import postprocesor as pos
+    import solutil as sol
+    SOLIDSPY_AVAILABLE = True
+except ImportError as e:
+    SOLIDSPY_AVAILABLE = False
+    SOLIDSPY_ERROR = str(e)
+except Exception as e:
+    SOLIDSPY_AVAILABLE = False
+    SOLIDSPY_ERROR = f"Unexpected error: {str(e)}"
 
 
 # Page configuration
@@ -351,6 +379,342 @@ def build_yaml_config(model_name, description, geometry_type, geom_params, mater
     return config
 
 
+def run_solidspy_solver(nodes_array, elements_array, materials_array, loads_array):
+    """
+    Run SolidsPy FEA solver on the generated mesh.
+
+    Parameters
+    ----------
+    nodes_array : ndarray
+        Nodes array (N x 5): [node_id, x, y, bc_x, bc_y]
+    elements_array : ndarray
+        Elements array (M x 7+): [ele_id, ele_type, mat_id, node1, node2, ...]
+    materials_array : ndarray
+        Materials array (K x 3): [E, nu, density]
+    loads_array : ndarray or None
+        Loads array (L x 3): [node_id, fx, fy]
+
+    Returns
+    -------
+    dict
+        Results dictionary containing:
+        - 'success': bool
+        - 'displacements': ndarray (completed displacements UC)
+        - 'strains': ndarray (strains at nodes)
+        - 'stresses': ndarray (stresses at nodes)
+        - 'nodes': ndarray (nodes for plotting)
+        - 'elements': ndarray (elements for plotting)
+        - 'max_displacement': float
+        - 'max_stress': float
+        - 'error': str (if failed)
+    """
+    if not SOLIDSPY_AVAILABLE:
+        return {
+            'success': False,
+            'error': 'SolidsPy modules not available. Check solidspy folder.'
+        }
+
+    try:
+        # Step 1: Create assembly operator
+        DME, IBC, neq = ass.DME(nodes_array, elements_array)
+
+        # Step 2: Assemble global stiffness matrix
+        KG = ass.assembler(elements_array, materials_array, nodes_array, neq, DME)
+
+        # Step 3: Assemble loads vector
+        if loads_array is None or len(loads_array) == 0:
+            loads_array = np.zeros((1, 3))
+        RHSG = ass.loadasem(loads_array, IBC, neq)
+
+        # Step 4: Solve system of equations
+        UG = sol.static_sol(KG, RHSG)
+
+        # Step 5: Complete displacements vector
+        UC = pos.complete_disp(IBC, nodes_array, UG)
+
+        # Step 6: Compute strains and stresses at nodes
+        E_nodes, S_nodes = pos.strain_nodes(nodes_array, elements_array, materials_array, UC)
+
+        # Calculate summary statistics
+        max_disp = np.max(np.abs(UC))
+        max_stress = np.max(np.abs(S_nodes))
+
+        return {
+            'success': True,
+            'displacements': UC,
+            'strains': E_nodes,
+            'stresses': S_nodes,
+            'nodes': nodes_array,
+            'elements': elements_array,
+            'max_displacement': max_disp,
+            'max_stress': max_stress,
+            'neq': neq
+        }
+
+    except Exception as e:
+        return {
+            'success': False,
+            'error': str(e)
+        }
+
+
+def create_interactive_contour_plot(nodes, elements, field_values, title, colorbar_title, height=700):
+    """
+    Create an interactive Plotly contour plot for FEM results.
+
+    Parameters
+    ----------
+    nodes : ndarray
+        Nodes array with coordinates
+    elements : ndarray
+        Elements array with connectivity
+    field_values : ndarray
+        Field values at nodes (1D array)
+    title : str
+        Plot title
+    colorbar_title : str
+        Label for colorbar
+    height : int
+        Plot height in pixels
+
+    Returns
+    -------
+    fig : plotly.graph_objects.Figure
+        Interactive Plotly figure
+    """
+    import plotly.graph_objects as go
+
+    # Extract coordinates
+    x = nodes[:, 1]
+    y = nodes[:, 2]
+
+    # Get element connectivity (triangles)
+    # Elements format: [id, type, mat_id, node1, node2, node3, ...]
+    # For triangles: columns 3, 4, 5 are the node indices
+    triangles = elements[:, 3:6].astype(int)
+
+    # Create triangulation-based contour plot
+    fig = go.Figure(data=go.Mesh3d(
+        x=x,
+        y=y,
+        z=np.zeros_like(x),  # 2D mesh
+        i=triangles[:, 0],
+        j=triangles[:, 1],
+        k=triangles[:, 2],
+        intensity=field_values,
+        colorscale='RdYlBu_r',
+        colorbar=dict(
+            title=dict(text=colorbar_title, side='right'),
+            tickformat='.2e',
+            thickness=20,
+            len=0.7
+        ),
+        hovertemplate='<b>Value</b>: %{intensity:.3e}<br>' +
+                      '<b>X</b>: %{x:.3f}<br>' +
+                      '<b>Y</b>: %{y:.3f}<br>' +
+                      '<extra></extra>',
+        showscale=True
+    ))
+
+    fig.update_layout(
+        title=dict(text=title, x=0.5, xanchor='center'),
+        scene=dict(
+            xaxis=dict(title='X', showgrid=False),
+            yaxis=dict(title='Y', showgrid=False),
+            zaxis=dict(showticklabels=False, showgrid=False),
+            aspectmode='data',
+            camera=dict(
+                eye=dict(x=0, y=0, z=2.5),
+                up=dict(x=0, y=1, z=0),  # Y-axis points up
+                center=dict(x=0, y=0, z=0),
+                projection=dict(type='orthographic')
+            )
+        ),
+        height=height,
+        margin=dict(l=0, r=0, t=40, b=0),
+        hovermode='closest'
+    )
+
+    return fig
+
+
+def display_solver_results(results):
+    """
+    Display SolidsPy solver results in Streamlit with interactive Plotly visualizations.
+
+    Parameters
+    ----------
+    results : dict
+        Results dictionary from run_solidspy_solver
+    """
+    if not results['success']:
+        st.error(f"❌ Solver Error: {results['error']}")
+        return
+
+    st.success("✅ Analysis Complete!")
+
+    # Results summary
+    st.markdown("---")
+    st.markdown('<p class="section-header">📊 Results Summary</p>', unsafe_allow_html=True)
+
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        st.metric("Total Nodes", len(results['nodes']))
+        st.metric("Total Elements", len(results['elements']))
+    with col2:
+        st.metric("Total DOFs", results['neq'])
+        st.metric("Max Displacement", f"{results['max_displacement']:.3e} m")
+    with col3:
+        st.metric("Max Stress", f"{results['max_stress']:.3e} Pa")
+        st.metric("Max Stress (MPa)", f"{results['max_stress']/1e6:.2f}")
+
+    # Visualization
+    st.markdown("---")
+    st.markdown('<p class="section-header">📈 Interactive Visualization</p>', unsafe_allow_html=True)
+
+    st.info("💡 Hover over plots to see values | Drag to rotate | Scroll to zoom")
+
+    try:
+        # Extract data
+        nodes = results['nodes']
+        elements = results['elements']
+        disp = results['displacements']
+        strains = results['strains']
+        stresses = results['stresses']
+
+        # Compute displacement magnitude
+        disp_mag = np.sqrt(disp[:, 0]**2 + disp[:, 1]**2)
+
+        # Create tabs for different result types
+        tab1, tab2, tab3 = st.tabs(["🔵 Displacements", "🟢 Strains", "🔴 Stresses"])
+
+        with tab1:
+            st.markdown("### Displacement Fields")
+
+            # Sub-tabs for displacement components
+            subtab1, subtab2, subtab3 = st.tabs(["Magnitude", "X-Component", "Y-Component"])
+
+            with subtab1:
+                fig = create_interactive_contour_plot(
+                    nodes, elements, disp_mag,
+                    "Displacement Magnitude",
+                    "Displacement (m)",
+                    height=700
+                )
+                st.plotly_chart(fig, use_container_width=True)
+
+            with subtab2:
+                fig = create_interactive_contour_plot(
+                    nodes, elements, disp[:, 0],
+                    "Horizontal Displacement (ux)",
+                    "ux (m)",
+                    height=700
+                )
+                st.plotly_chart(fig, use_container_width=True)
+
+            with subtab3:
+                fig = create_interactive_contour_plot(
+                    nodes, elements, disp[:, 1],
+                    "Vertical Displacement (uy)",
+                    "uy (m)",
+                    height=700
+                )
+                st.plotly_chart(fig, use_container_width=True)
+
+        with tab2:
+            st.markdown("### Strain Fields")
+
+            # Sub-tabs for strain components
+            subtab1, subtab2, subtab3 = st.tabs(["ε-xx", "ε-yy", "γ-xy"])
+
+            with subtab1:
+                fig = create_interactive_contour_plot(
+                    nodes, elements, strains[:, 0],
+                    "Normal Strain (ε-xx)",
+                    "ε-xx",
+                    height=700
+                )
+                st.plotly_chart(fig, use_container_width=True)
+
+            with subtab2:
+                fig = create_interactive_contour_plot(
+                    nodes, elements, strains[:, 1],
+                    "Normal Strain (ε-yy)",
+                    "ε-yy",
+                    height=700
+                )
+                st.plotly_chart(fig, use_container_width=True)
+
+            with subtab3:
+                fig = create_interactive_contour_plot(
+                    nodes, elements, strains[:, 2],
+                    "Shear Strain (γ-xy)",
+                    "γ-xy",
+                    height=700
+                )
+                st.plotly_chart(fig, use_container_width=True)
+
+        with tab3:
+            st.markdown("### Stress Fields")
+
+            # Compute von Mises stress
+            sigma_xx = stresses[:, 0]
+            sigma_yy = stresses[:, 1]
+            tau_xy = stresses[:, 2]
+            von_mises = np.sqrt(sigma_xx**2 - sigma_xx*sigma_yy + sigma_yy**2 + 3*tau_xy**2)
+
+            # Sub-tabs for stress components
+            subtab1, subtab2, subtab3, subtab4 = st.tabs(["Von Mises", "σ-xx", "σ-yy", "τ-xy"])
+
+            with subtab1:
+                fig = create_interactive_contour_plot(
+                    nodes, elements, von_mises,
+                    "Von Mises Stress",
+                    "σ (Pa)",
+                    height=700
+                )
+                st.plotly_chart(fig, use_container_width=True)
+                st.info(f"💡 Max Von Mises Stress: {np.max(von_mises):.3e} Pa ({np.max(von_mises)/1e6:.2f} MPa)")
+
+            with subtab2:
+                fig = create_interactive_contour_plot(
+                    nodes, elements, sigma_xx,
+                    "Normal Stress (σ-xx)",
+                    "σ-xx (Pa)",
+                    height=700
+                )
+                st.plotly_chart(fig, use_container_width=True)
+
+            with subtab3:
+                fig = create_interactive_contour_plot(
+                    nodes, elements, sigma_yy,
+                    "Normal Stress (σ-yy)",
+                    "σ-yy (Pa)",
+                    height=700
+                )
+                st.plotly_chart(fig, use_container_width=True)
+
+            with subtab4:
+                fig = create_interactive_contour_plot(
+                    nodes, elements, tau_xy,
+                    "Shear Stress (τ-xy)",
+                    "τ-xy (Pa)",
+                    height=700
+                )
+                st.plotly_chart(fig, use_container_width=True)
+
+    except Exception as e:
+        st.error(f"❌ Error generating interactive plots: {str(e)}")
+        st.info("Field data is available in the results, but visualization failed.")
+
+        # Fallback: show available data
+        with st.expander("View Raw Data Summary"):
+            st.write(f"Displacement shape: {results['displacements'].shape}")
+            st.write(f"Strain shape: {results['strains'].shape}")
+            st.write(f"Stress shape: {results['stresses'].shape}")
+            st.code(f"Error details: {str(e)}")
+
+
 def main():
     """Main application"""
     initialize_session_state()
@@ -366,7 +730,7 @@ def main():
 
         page = st.radio(
             "Choose a page:",
-            ["🏗️ Model Builder", "📂 Load GEO File", "📚 Load Example", "ℹ️ About"],
+            ["🏗️ Model Builder", "📂 Load GEO File", "📊 Analyze Existing Model", "📚 Load Example", "ℹ️ About"],
             index=0
         )
 
@@ -374,6 +738,8 @@ def main():
         st.markdown("### Quick Tips")
         if page == "📂 Load GEO File":
             st.info("💡 Upload your .geo file\n\n🔧 Define materials for physical groups\n\n🔒 Set boundary conditions\n\n⚡ Add loads\n\n✅ Generate mesh!")
+        elif page == "📊 Analyze Existing Model":
+            st.info("💡 Upload SolidsPy txt files\n\n📂 Or load from folder\n\n🔬 Run FEA analysis\n\n📈 View results!")
         else:
             st.info("💡 Start by selecting a geometry type\n\n📐 Adjust parameters in real-time\n\n🔒 Add boundary conditions\n\n⚡ Define loads\n\n✅ Generate your model!")
 
@@ -381,6 +747,8 @@ def main():
         show_model_builder()
     elif page == "📂 Load GEO File":
         show_geo_loader()
+    elif page == "📊 Analyze Existing Model":
+        show_analyze_existing()
     elif page == "📚 Load Example":
         show_examples()
     else:
@@ -509,7 +877,7 @@ def show_model_builder():
                             converter = FEMConverter(config, output_dir=tmpdir)
                             converter.convert()
 
-                            # Read output files
+                            # Read output files as strings
                             nodes = (Path(tmpdir) / "nodes.txt").read_text()
                             eles = (Path(tmpdir) / "eles.txt").read_text()
                             mater = (Path(tmpdir) / "mater.txt").read_text()
@@ -524,6 +892,12 @@ def show_model_builder():
                             geo_content = geo_file.read_text() if geo_file.exists() else None
                             msh_content = msh_file.read_text() if msh_file.exists() else None
 
+                            # Also read arrays for solver
+                            nodes_array = np.loadtxt(str(Path(tmpdir) / "nodes.txt"), ndmin=2)
+                            elements_array = np.loadtxt(str(Path(tmpdir) / "eles.txt"), ndmin=2, dtype=int)
+                            materials_array = np.loadtxt(str(Path(tmpdir) / "mater.txt"), ndmin=2)
+                            loads_array = np.loadtxt(str(loads_file), ndmin=2) if loads_file.exists() else None
+
                             st.session_state.output_files = {
                                 'yaml': st.session_state.yaml_content,
                                 'geo': geo_content,
@@ -533,12 +907,23 @@ def show_model_builder():
                                 'mater': mater,
                                 'loads': loads_content
                             }
+
+                            st.session_state.output_arrays = {
+                                'nodes': nodes_array,
+                                'elements': elements_array,
+                                'materials': materials_array,
+                                'loads': loads_array
+                            }
+
                             st.session_state.conversion_complete = True
 
                     st.success("✅ Conversion complete!")
 
                 except Exception as e:
+                    import traceback
                     st.error(f"❌ Conversion error: {str(e)}")
+                    with st.expander("Show detailed error traceback"):
+                        st.code(traceback.format_exc())
 
         with col3:
             if st.button("🔄 Start Over"):
@@ -662,6 +1047,38 @@ def show_model_builder():
 
                     except Exception as e:
                         st.error(f"❌ Error saving files: {str(e)}")
+
+            # Run SolidsPy Solver
+            if SOLIDSPY_AVAILABLE:
+                st.markdown("---")
+                st.markdown('<p class="section-header">🔬 Run FEA Analysis</p>', unsafe_allow_html=True)
+
+                st.info("💡 Run SolidsPy solver to compute displacements, strains, and stresses")
+
+                if st.button("🚀 Run SolidsPy Solver", key="solve_model", use_container_width=True):
+                    with st.spinner("Running FEA analysis..."):
+                        # Get arrays from session state
+                        nodes_array = st.session_state.output_arrays['nodes']
+                        elements_array = st.session_state.output_arrays['elements']
+                        materials_array = st.session_state.output_arrays['materials']
+                        loads_array = st.session_state.output_arrays.get('loads')
+
+                        # Run solver
+                        results = run_solidspy_solver(
+                            nodes_array,
+                            elements_array,
+                            materials_array,
+                            loads_array
+                        )
+
+                        # Display results
+                        display_solver_results(results)
+            else:
+                st.markdown("---")
+                st.warning("⚠️ SolidsPy not available. Solver functionality disabled.")
+                if SOLIDSPY_ERROR:
+                    st.error(f"Import error: {SOLIDSPY_ERROR}")
+                st.info("To enable solver, ensure the `solidspy/` folder is in the project directory.")
 
 
 def show_geo_loader():
@@ -979,12 +1396,11 @@ def show_geo_loader():
                                 if loads_list:
                                     loads_array = np.vstack(loads_list)
 
-                            # Create materials array
-                            materials_array = np.zeros((len(materials), 3))
+                            # Create materials array (only E and nu for SolidsPy)
+                            materials_array = np.zeros((len(materials), 2))
                             for i, mat in enumerate(materials):
                                 materials_array[i, 0] = mat['E']
                                 materials_array[i, 1] = mat['nu']
-                                materials_array[i, 2] = 0.0
 
                             # Save to strings
                             from io import StringIO
@@ -1016,6 +1432,14 @@ def show_geo_loader():
                                 'mater': mater_str.getvalue(),
                                 'loads': loads_str
                             }
+
+                            st.session_state.output_arrays = {
+                                'nodes': nodes_array,
+                                'elements': elements_array,
+                                'materials': materials_array,
+                                'loads': loads_array
+                            }
+
                             st.session_state.conversion_complete = True
                             st.session_state.model_name_geo = model_name
 
@@ -1111,6 +1535,214 @@ def show_geo_loader():
 
                     except Exception as e:
                         st.error(f"❌ Error: {str(e)}")
+
+            # Run SolidsPy Solver
+            if SOLIDSPY_AVAILABLE:
+                st.markdown("---")
+                st.markdown('<p class="section-header">🔬 Run FEA Analysis</p>', unsafe_allow_html=True)
+
+                st.info("💡 Run SolidsPy solver to compute displacements, strains, and stresses")
+
+                if st.button("🚀 Run SolidsPy Solver", key="solve_geo", use_container_width=True):
+                    with st.spinner("Running FEA analysis..."):
+                        # Get arrays from session state
+                        nodes_array = st.session_state.output_arrays['nodes']
+                        elements_array = st.session_state.output_arrays['elements']
+                        materials_array = st.session_state.output_arrays['materials']
+                        loads_array = st.session_state.output_arrays.get('loads')
+
+                        # Run solver
+                        results = run_solidspy_solver(
+                            nodes_array,
+                            elements_array,
+                            materials_array,
+                            loads_array
+                        )
+
+                        # Display results
+                        display_solver_results(results)
+            else:
+                st.markdown("---")
+                st.warning("⚠️ SolidsPy not available. Solver functionality disabled.")
+                if SOLIDSPY_ERROR:
+                    st.error(f"Import error: {SOLIDSPY_ERROR}")
+                st.info("To enable solver, ensure the `solidspy/` folder is in the project directory.")
+
+
+def show_analyze_existing():
+    """Analyze existing SolidsPy model files"""
+    st.markdown('<p class="section-header">📊 Analyze Existing SolidsPy Model</p>', unsafe_allow_html=True)
+
+    st.markdown("""
+    This page allows you to run FEA analysis on **existing SolidsPy txt files**.
+
+    **Two options:**
+    1. **Upload Files**: Upload individual txt files (nodes, eles, mater, loads)
+    2. **Load from Folder**: Specify folder path and file prefix (like `solver.py`)
+
+    **Use case:** When you already have SolidsPy files and just want to run analysis and visualize results.
+    """)
+
+    st.markdown("---")
+
+    # Choose input method
+    st.markdown('<p class="section-header">📥 Input Method</p>', unsafe_allow_html=True)
+
+    input_method = st.radio(
+        "How would you like to load the files?",
+        ["Upload Files", "Load from Folder"],
+        horizontal=True
+    )
+
+    st.markdown("---")
+
+    nodes_array = None
+    elements_array = None
+    materials_array = None
+    loads_array = None
+
+    if input_method == "Upload Files":
+        st.markdown('<p class="section-header">📂 Upload SolidsPy Files</p>', unsafe_allow_html=True)
+
+        col1, col2 = st.columns(2)
+
+        with col1:
+            st.markdown("**Required Files:**")
+
+            nodes_file = st.file_uploader("Nodes file (nodes.txt)", type=['txt'], key="nodes_upload")
+            eles_file = st.file_uploader("Elements file (eles.txt)", type=['txt'], key="eles_upload")
+            mater_file = st.file_uploader("Materials file (mater.txt)", type=['txt'], key="mater_upload")
+
+        with col2:
+            st.markdown("**Optional Files:**")
+
+            loads_file = st.file_uploader("Loads file (loads.txt)", type=['txt'], key="loads_upload")
+            st.info("💡 Loads file is optional. Analysis can run without loads (free vibration, etc.)")
+
+        # Process uploaded files
+        if nodes_file and eles_file and mater_file:
+            try:
+                # Read uploaded files
+                from io import StringIO
+
+                nodes_array = np.loadtxt(StringIO(nodes_file.getvalue().decode('utf-8')), ndmin=2)
+                elements_array = np.loadtxt(StringIO(eles_file.getvalue().decode('utf-8')), ndmin=2, dtype=int)
+                materials_array = np.loadtxt(StringIO(mater_file.getvalue().decode('utf-8')), ndmin=2)
+
+                if loads_file:
+                    loads_array = np.loadtxt(StringIO(loads_file.getvalue().decode('utf-8')), ndmin=2)
+
+                st.success("✅ Files loaded successfully!")
+
+                # Show file info
+                st.markdown("---")
+                st.markdown('<p class="section-header">📋 Model Information</p>', unsafe_allow_html=True)
+
+                col1, col2, col3 = st.columns(3)
+                with col1:
+                    st.metric("Nodes", len(nodes_array))
+                with col2:
+                    st.metric("Elements", len(elements_array))
+                with col3:
+                    st.metric("Materials", len(materials_array))
+
+            except Exception as e:
+                st.error(f"❌ Error loading files: {str(e)}")
+                st.info("Make sure files are in correct SolidsPy format")
+
+    else:  # Load from Folder
+        st.markdown('<p class="section-header">📂 Load from Folder</p>', unsafe_allow_html=True)
+
+        st.info("💡 This method loads files like: `folder/prefix_nodes.txt`, `folder/prefix_eles.txt`, etc.")
+
+        col1, col2 = st.columns(2)
+
+        with col1:
+            folder_path = st.text_input("Folder Path", value="./output", help="Path to folder containing SolidsPy files")
+
+        with col2:
+            file_prefix = st.text_input("File Prefix", value="", help="Prefix for files (e.g., 'Ho' for Honodes.txt, Hoeles.txt, ...)")
+
+        if st.button("📥 Load Files from Folder", use_container_width=True):
+            try:
+                folder = Path(folder_path)
+
+                if not folder.exists():
+                    st.error(f"❌ Folder not found: {folder_path}")
+                else:
+                    # Construct file paths
+                    nodes_path = folder / f"{file_prefix}nodes.txt"
+                    eles_path = folder / f"{file_prefix}eles.txt"
+                    mater_path = folder / f"{file_prefix}mater.txt"
+                    loads_path = folder / f"{file_prefix}loads.txt"
+
+                    # Check if required files exist
+                    if not nodes_path.exists():
+                        st.error(f"❌ Nodes file not found: {nodes_path}")
+                    elif not eles_path.exists():
+                        st.error(f"❌ Elements file not found: {eles_path}")
+                    elif not mater_path.exists():
+                        st.error(f"❌ Materials file not found: {mater_path}")
+                    else:
+                        # Load files
+                        nodes_array = np.loadtxt(str(nodes_path), ndmin=2)
+                        elements_array = np.loadtxt(str(eles_path), ndmin=2, dtype=int)
+                        materials_array = np.loadtxt(str(mater_path), ndmin=2)
+
+                        if loads_path.exists():
+                            loads_array = np.loadtxt(str(loads_path), ndmin=2)
+
+                        st.success(f"✅ Files loaded from: `{folder_path}/`")
+
+                        # Show file info
+                        st.markdown("---")
+                        st.markdown('<p class="section-header">📋 Model Information</p>', unsafe_allow_html=True)
+
+                        col1, col2, col3 = st.columns(3)
+                        with col1:
+                            st.metric("Nodes", len(nodes_array))
+                        with col2:
+                            st.metric("Elements", len(elements_array))
+                        with col3:
+                            st.metric("Materials", len(materials_array))
+
+                        st.markdown("**Files loaded:**")
+                        st.markdown(f"- `{nodes_path}`")
+                        st.markdown(f"- `{eles_path}`")
+                        st.markdown(f"- `{mater_path}`")
+                        if loads_path.exists():
+                            st.markdown(f"- `{loads_path}`")
+
+            except Exception as e:
+                st.error(f"❌ Error loading files: {str(e)}")
+                st.info("Make sure files exist and are in correct SolidsPy format")
+
+    # Run Solver
+    if nodes_array is not None and elements_array is not None and materials_array is not None:
+        if SOLIDSPY_AVAILABLE:
+            st.markdown("---")
+            st.markdown('<p class="section-header">🔬 Run FEA Analysis</p>', unsafe_allow_html=True)
+
+            st.info("💡 Click below to run SolidsPy solver on the loaded model")
+
+            if st.button("🚀 Run SolidsPy Solver", key="solve_existing", use_container_width=True):
+                with st.spinner("Running FEA analysis..."):
+                    # Run solver
+                    results = run_solidspy_solver(
+                        nodes_array,
+                        elements_array,
+                        materials_array,
+                        loads_array
+                    )
+
+                    # Display results
+                    display_solver_results(results)
+        else:
+            st.markdown("---")
+            st.warning("⚠️ SolidsPy not available. Solver functionality disabled.")
+            if SOLIDSPY_ERROR:
+                st.error(f"Import error: {SOLIDSPY_ERROR}")
+            st.info("To enable solver, ensure the `solidspy/` folder is in the project directory.")
 
 
 def show_examples():

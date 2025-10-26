@@ -204,19 +204,17 @@ class FEMConverter:
         if self.config.layers:
             # One material per layer
             n_materials = len(self.config.layers)
-            materials = np.zeros((n_materials, 3))
+            materials = np.zeros((n_materials, 2))
 
             for i, layer in enumerate(self.config.layers):
                 materials[i, 0] = layer.material.E
                 materials[i, 1] = layer.material.nu
-                materials[i, 2] = 0.0  # Thickness (for 2D plane stress/strain)
 
         else:
             # Single material
-            materials = np.zeros((1, 3))
+            materials = np.zeros((1, 2))
             materials[0, 0] = self.config.material.E
             materials[0, 1] = self.config.material.nu
-            materials[0, 2] = 0.0
 
         return materials
 
