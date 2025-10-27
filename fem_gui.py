@@ -61,7 +61,7 @@ st.set_page_config(
 st.markdown("""
 <style>
     .main-header {
-        font-size: 2.5rem;
+        font-size: 4rem !important;
         font-weight: bold;
         color: #1f77b4;
         text-align: center;
@@ -379,6 +379,79 @@ def build_yaml_config(model_name, description, geometry_type, geom_params, mater
     return config
 
 
+def calculate_reaction_forces(nodes_array, elements_array, materials_array,
+                             UC, loads_array, DME, IBC, neq):
+    """
+    Calculate reaction forces at constrained nodes.
+
+    Parameters
+    ----------
+    nodes_array : ndarray
+        Nodes array with boundary conditions
+    elements_array : ndarray
+        Elements array
+    materials_array : ndarray
+        Materials array
+    UC : ndarray
+        Complete displacement vector
+    loads_array : ndarray
+        Applied loads array
+    DME : ndarray
+        Assembly operator
+    IBC : ndarray
+        Boundary conditions indicator
+    neq : int
+        Number of equations
+
+    Returns
+    -------
+    reactions : ndarray
+        Reaction forces array (N x 3): [node_id, Rx, Ry]
+    """
+    # Total number of DOFs
+    n_nodes = len(nodes_array)
+    n_dof = 2 * n_nodes
+
+    # Assemble full stiffness matrix (including constrained DOFs)
+    # We need the full matrix to compute reactions
+    KG_full = ass.assembler(elements_array, materials_array, nodes_array, n_dof, DME)
+
+    # Flatten displacement vector
+    U_full = UC.flatten()
+
+    # Calculate internal forces: F_internal = K * U
+    F_internal = KG_full @ U_full
+
+    # Create applied loads vector
+    F_applied = np.zeros(n_dof)
+    if loads_array is not None and len(loads_array) > 0:
+        for load in loads_array:
+            node_id = int(load[0])
+            F_applied[2*node_id] = load[1]      # Fx
+            F_applied[2*node_id + 1] = load[2]  # Fy
+
+    # Reaction forces = Internal forces - Applied forces
+    F_reaction = F_internal - F_applied
+
+    # Extract reactions at constrained nodes only
+    reaction_list = []
+    for i, node in enumerate(nodes_array):
+        node_id = int(node[0])
+        bc_x = int(node[3])
+        bc_y = int(node[4])
+
+        # If either DOF is constrained, this node has reactions
+        if bc_x == -1 or bc_y == -1:
+            Rx = F_reaction[2*i] if bc_x == -1 else 0.0
+            Ry = F_reaction[2*i + 1] if bc_y == -1 else 0.0
+            reaction_list.append([node_id, Rx, Ry])
+
+    if reaction_list:
+        return np.array(reaction_list)
+    else:
+        return np.array([[0, 0, 0]])  # No reactions
+
+
 def run_solidspy_solver(nodes_array, elements_array, materials_array, loads_array):
     """
     Run SolidsPy FEA solver on the generated mesh.
@@ -435,6 +508,11 @@ def run_solidspy_solver(nodes_array, elements_array, materials_array, loads_arra
         # Step 6: Compute strains and stresses at nodes
         E_nodes, S_nodes = pos.strain_nodes(nodes_array, elements_array, materials_array, UC)
 
+        # Step 7: Calculate reaction forces at constrained nodes
+        # Reaction forces = K * U - F_applied at constrained DOFs
+        reactions = calculate_reaction_forces(nodes_array, elements_array, materials_array,
+                                             UC, loads_array, DME, IBC, neq)
+
         # Calculate summary statistics
         max_disp = np.max(np.abs(UC))
         max_stress = np.max(np.abs(S_nodes))
@@ -446,6 +524,8 @@ def run_solidspy_solver(nodes_array, elements_array, materials_array, loads_arra
             'stresses': S_nodes,
             'nodes': nodes_array,
             'elements': elements_array,
+            'reactions': reactions,
+            'loads_array': loads_array,
             'max_displacement': max_disp,
             'max_stress': max_stress,
             'neq': neq
@@ -688,6 +768,552 @@ def create_filtered_contour_plot(nodes, elements, field_values, title, colorbar_
     return fig, stats
 
 
+def create_deformed_configuration_plot(nodes, elements, displacements, scale_factor=1.0, height=700):
+    """
+    Create an interactive plot showing deformed and undeformed configurations.
+
+    Parameters
+    ----------
+    nodes : ndarray
+        Nodes array with original coordinates (N x 5): [node_id, x, y, bc_x, bc_y]
+    elements : ndarray
+        Elements array with connectivity (M x 7+): [ele_id, ele_type, mat_id, node1, node2, ...]
+    displacements : ndarray
+        Displacement array (N x 2): [ux, uy] for each node
+    scale_factor : float
+        Scale factor to amplify displacements for visualization (default: 1.0)
+    height : int
+        Plot height in pixels
+
+    Returns
+    -------
+    fig : plotly.graph_objects.Figure
+        Interactive Plotly figure with original and deformed meshes
+    """
+    import plotly.graph_objects as go
+
+    # Extract original coordinates
+    x_orig = nodes[:, 1]
+    y_orig = nodes[:, 2]
+
+    # Compute deformed coordinates
+    x_def = x_orig + scale_factor * displacements[:, 0]
+    y_def = y_orig + scale_factor * displacements[:, 1]
+
+    # Compute displacement magnitude
+    disp_mag = np.sqrt(displacements[:, 0]**2 + displacements[:, 1]**2)
+
+    # Get element connectivity (triangles)
+    triangles = elements[:, 3:6].astype(int)
+
+    # Create figure with two meshes
+    fig = go.Figure()
+
+    # Add original mesh (gray, semi-transparent)
+    fig.add_trace(go.Mesh3d(
+        x=x_orig,
+        y=y_orig,
+        z=np.zeros_like(x_orig),
+        i=triangles[:, 0],
+        j=triangles[:, 1],
+        k=triangles[:, 2],
+        color='lightgray',
+        opacity=0.3,
+        name='Original',
+        showlegend=True,
+        hoverinfo='skip',
+        flatshading=True
+    ))
+
+    # Add deformed mesh (colored by displacement magnitude)
+    fig.add_trace(go.Mesh3d(
+        x=x_def,
+        y=y_def,
+        z=np.zeros_like(x_def),
+        i=triangles[:, 0],
+        j=triangles[:, 1],
+        k=triangles[:, 2],
+        intensity=disp_mag,
+        colorscale='Plasma',
+        colorbar=dict(
+            title=dict(text='Displacement<br>Magnitude (m)', side='right'),
+            tickformat='.2e',
+            thickness=20,
+            len=0.7
+        ),
+        name='Deformed',
+        showlegend=True,
+        hovertemplate='<b>Displacement</b>: %{intensity:.3e} m<br>' +
+                      '<b>X</b>: %{x:.3f}<br>' +
+                      '<b>Y</b>: %{y:.3f}<br>' +
+                      '<extra></extra>',
+        showscale=True
+    ))
+
+    fig.update_layout(
+        title=dict(
+            text=f'Deformed Configuration (Scale Factor: {scale_factor}x)',
+            x=0.5,
+            xanchor='center'
+        ),
+        scene=dict(
+            xaxis=dict(title='X', showgrid=True, gridcolor='lightgray'),
+            yaxis=dict(title='Y', showgrid=True, gridcolor='lightgray'),
+            zaxis=dict(showticklabels=False, showgrid=False),
+            aspectmode='data',
+            camera=dict(
+                eye=dict(x=0, y=0, z=2.5),
+                up=dict(x=0, y=1, z=0),
+                center=dict(x=0, y=0, z=0),
+                projection=dict(type='orthographic')
+            )
+        ),
+        height=height,
+        margin=dict(l=0, r=0, t=40, b=0),
+        hovermode='closest',
+        legend=dict(
+            x=0.02,
+            y=0.98,
+            bgcolor='rgba(255,255,255,0.8)',
+            bordercolor='gray',
+            borderwidth=1
+        )
+    )
+
+    return fig
+
+
+def create_reaction_forces_plot(nodes, elements, reactions, loads_array=None, height=700):
+    """
+    Create a plot showing reaction forces as vector arrows on the mesh.
+
+    Parameters
+    ----------
+    nodes : ndarray
+        Nodes array with coordinates
+    elements : ndarray
+        Elements array with connectivity
+    reactions : ndarray
+        Reactions array (N x 3): [node_id, Rx, Ry]
+    loads_array : ndarray or None
+        Applied loads array (M x 3): [node_id, Fx, Fy]
+    height : int
+        Plot height in pixels
+
+    Returns
+    -------
+    fig : plotly.graph_objects.Figure
+        Interactive Plotly figure showing reactions
+    """
+    import plotly.graph_objects as go
+
+    # Extract coordinates
+    x = nodes[:, 1]
+    y = nodes[:, 2]
+
+    # Get element connectivity
+    triangles = elements[:, 3:6].astype(int)
+
+    # Create figure with mesh
+    fig = go.Figure()
+
+    # Add mesh (semi-transparent)
+    fig.add_trace(go.Mesh3d(
+        x=x,
+        y=y,
+        z=np.zeros_like(x),
+        i=triangles[:, 0],
+        j=triangles[:, 1],
+        k=triangles[:, 2],
+        color='lightblue',
+        opacity=0.3,
+        name='Mesh',
+        showlegend=True,
+        hoverinfo='skip',
+        flatshading=True
+    ))
+
+    # Calculate arrow scaling
+    max_reaction = np.max(np.abs(reactions[:, 1:])) if len(reactions) > 0 else 1.0
+    coords = nodes[:, 1:3]
+    char_length = max(np.max(coords[:, 0]) - np.min(coords[:, 0]),
+                     np.max(coords[:, 1]) - np.min(coords[:, 1]))
+    arrow_scale = 0.1 * char_length / max_reaction if max_reaction > 0 else 0.1 * char_length
+
+    # Add reaction force arrows
+    for reaction in reactions:
+        node_id = int(reaction[0])
+        Rx = reaction[1]
+        Ry = reaction[2]
+
+        # Get node coordinates
+        node_x = nodes[node_id, 1]
+        node_y = nodes[node_id, 2]
+
+        # Draw arrow if reaction is non-zero
+        if abs(Rx) > 1e-10 or abs(Ry) > 1e-10:
+            # Arrow endpoint
+            end_x = node_x + Rx * arrow_scale
+            end_y = node_y + Ry * arrow_scale
+
+            # Arrow line
+            fig.add_trace(go.Scatter3d(
+                x=[node_x, end_x],
+                y=[node_y, end_y],
+                z=[0, 0],
+                mode='lines+markers',
+                line=dict(color='red', width=6),
+                marker=dict(size=[4, 8], color='red', symbol=['circle', 'diamond']),
+                name=f'Reaction {node_id}',
+                showlegend=False,
+                hovertemplate=f'<b>Node {node_id}</b><br>' +
+                             f'Rx: {Rx:.3e} N<br>' +
+                             f'Ry: {Ry:.3e} N<br>' +
+                             '<extra></extra>'
+            ))
+
+    # Add applied load arrows if provided
+    if loads_array is not None and len(loads_array) > 0:
+        max_load = np.max(np.abs(loads_array[:, 1:]))
+        load_arrow_scale = 0.1 * char_length / max_load if max_load > 0 else 0.1 * char_length
+
+        for load in loads_array:
+            node_id = int(load[0])
+            Fx = load[1]
+            Fy = load[2]
+
+            if abs(Fx) > 1e-10 or abs(Fy) > 1e-10:
+                node_x = nodes[node_id, 1]
+                node_y = nodes[node_id, 2]
+
+                # Arrow starts away from node (load is applied TO the node)
+                start_x = node_x - Fx * load_arrow_scale
+                start_y = node_y - Fy * load_arrow_scale
+
+                fig.add_trace(go.Scatter3d(
+                    x=[start_x, node_x],
+                    y=[start_y, node_y],
+                    z=[0, 0],
+                    mode='lines+markers',
+                    line=dict(color='green', width=6),
+                    marker=dict(size=[8, 4], color='green', symbol=['diamond', 'circle']),
+                    name=f'Load {node_id}',
+                    showlegend=False,
+                    hovertemplate=f'<b>Node {node_id}</b><br>' +
+                                 f'Fx: {Fx:.3e} N<br>' +
+                                 f'Fy: {Fy:.3e} N<br>' +
+                                 '<extra></extra>'
+                ))
+
+    fig.update_layout(
+        title=dict(
+            text='Reaction Forces and Applied Loads',
+            x=0.5,
+            xanchor='center'
+        ),
+        scene=dict(
+            xaxis=dict(title='X', showgrid=True, gridcolor='lightgray'),
+            yaxis=dict(title='Y', showgrid=True, gridcolor='lightgray'),
+            zaxis=dict(showticklabels=False, showgrid=False),
+            aspectmode='data',
+            camera=dict(
+                eye=dict(x=0, y=0, z=2.5),
+                up=dict(x=0, y=1, z=0),
+                center=dict(x=0, y=0, z=0),
+                projection=dict(type='orthographic')
+            )
+        ),
+        height=height,
+        margin=dict(l=0, r=0, t=40, b=0),
+        hovermode='closest'
+    )
+
+    return fig
+
+
+def calculate_principal_stress_directions(stresses):
+    """
+    Calculate principal stress directions at each node.
+
+    Parameters
+    ----------
+    stresses : ndarray
+        Stress array (N x 3): [σxx, σyy, τxy]
+
+    Returns
+    -------
+    dict
+        Dictionary containing:
+        - 'sigma_1': Maximum principal stress
+        - 'sigma_2': Minimum principal stress
+        - 'theta_1': Angle of σ₁ direction (radians)
+        - 'theta_2': Angle of σ₂ direction (radians)
+        - 'dir_1_x': X-component of σ₁ direction unit vector
+        - 'dir_1_y': Y-component of σ₁ direction unit vector
+        - 'dir_2_x': X-component of σ₂ direction unit vector
+        - 'dir_2_y': Y-component of σ₂ direction unit vector
+    """
+    sigma_xx = stresses[:, 0]
+    sigma_yy = stresses[:, 1]
+    tau_xy = stresses[:, 2]
+
+    # Calculate principal stresses
+    sigma_avg = (sigma_xx + sigma_yy) / 2
+    R = np.sqrt(((sigma_xx - sigma_yy) / 2)**2 + tau_xy**2)
+
+    sigma_1 = sigma_avg + R  # Maximum principal stress
+    sigma_2 = sigma_avg - R  # Minimum principal stress
+
+    # Calculate principal directions
+    # θ = 0.5 * atan2(2*τxy, σxx - σyy)
+    theta_1 = 0.5 * np.arctan2(2 * tau_xy, sigma_xx - sigma_yy)
+    theta_2 = theta_1 + np.pi / 2  # Perpendicular to σ₁
+
+    # Direction unit vectors
+    dir_1_x = np.cos(theta_1)
+    dir_1_y = np.sin(theta_1)
+    dir_2_x = np.cos(theta_2)
+    dir_2_y = np.sin(theta_2)
+
+    return {
+        'sigma_1': sigma_1,
+        'sigma_2': sigma_2,
+        'theta_1': theta_1,
+        'theta_2': theta_2,
+        'dir_1_x': dir_1_x,
+        'dir_1_y': dir_1_y,
+        'dir_2_x': dir_2_x,
+        'dir_2_y': dir_2_y
+    }
+
+
+def create_principal_stress_trajectories_plot(nodes, elements, stresses, height=700, show_mode='both'):
+    """
+    Create a plot showing principal stress trajectories as arrows.
+
+    Parameters
+    ----------
+    nodes : ndarray
+        Nodes array with coordinates
+    elements : ndarray
+        Elements array with connectivity
+    stresses : ndarray
+        Stress array (N x 3): [σxx, σyy, τxy]
+    height : int
+        Plot height in pixels
+    show_mode : str
+        'sigma_1', 'sigma_2', or 'both' to show which trajectories
+
+    Returns
+    -------
+    fig : plotly.graph_objects.Figure
+        Interactive Plotly figure showing stress trajectories
+    """
+    import plotly.graph_objects as go
+
+    # Extract coordinates
+    x = nodes[:, 1]
+    y = nodes[:, 2]
+
+    # Get element connectivity
+    triangles = elements[:, 3:6].astype(int)
+
+    # Calculate principal stress directions
+    principal = calculate_principal_stress_directions(stresses)
+
+    # For coloring the mesh, use Von Mises or max principal when showing both
+    if show_mode == 'both':
+        # Color by Von Mises stress for neutral background
+        sigma_xx = stresses[:, 0]
+        sigma_yy = stresses[:, 1]
+        tau_xy = stresses[:, 2]
+        mesh_intensity = np.sqrt(sigma_xx**2 - sigma_xx*sigma_yy + sigma_yy**2 + 3*tau_xy**2)
+        title_text = "Principal Stress Trajectories (σ₁ and σ₂ - Perpendicular)"
+        color_title = "Von Mises (Pa)"
+    elif show_mode == 'sigma_1':
+        mesh_intensity = principal['sigma_1']
+        title_text = "Principal Stress Trajectories (σ₁ - Maximum)"
+        color_title = "σ₁ (Pa)"
+    else:  # sigma_2
+        mesh_intensity = principal['sigma_2']
+        title_text = "Principal Stress Trajectories (σ₂ - Minimum)"
+        color_title = "σ₂ (Pa)"
+
+    # Create figure with mesh
+    fig = go.Figure()
+
+    # Add mesh colored by stress
+    fig.add_trace(go.Mesh3d(
+        x=x,
+        y=y,
+        z=np.zeros_like(x),
+        i=triangles[:, 0],
+        j=triangles[:, 1],
+        k=triangles[:, 2],
+        intensity=mesh_intensity,
+        colorscale='RdYlBu_r',
+        colorbar=dict(
+            title=dict(text=color_title, side='right'),
+            tickformat='.2e',
+            thickness=20,
+            len=0.7
+        ),
+        hoverinfo='skip',
+        showscale=True,
+        opacity=0.6 if show_mode == 'both' else 0.7
+    ))
+
+    # Calculate arrow scaling
+    coords = nodes[:, 1:3]
+    char_length = max(np.max(coords[:, 0]) - np.min(coords[:, 0]),
+                     np.max(coords[:, 1]) - np.min(coords[:, 1]))
+    arrow_length = char_length * 0.03  # Fixed arrow length for direction
+
+    # Downsample nodes for clearer visualization
+    n_nodes = len(nodes)
+    skip = max(1, n_nodes // 300)  # Show ~300 arrows max
+
+    # Add direction arrows at sampled nodes
+    if show_mode in ['sigma_1', 'both']:
+        # Add σ₁ trajectories (orange/red)
+        for i in range(0, n_nodes, skip):
+            start_x = x[i] - principal['dir_1_x'][i] * arrow_length / 2
+            start_y = y[i] - principal['dir_1_y'][i] * arrow_length / 2
+            end_x = x[i] + principal['dir_1_x'][i] * arrow_length / 2
+            end_y = y[i] + principal['dir_1_y'][i] * arrow_length / 2
+
+            fig.add_trace(go.Scatter3d(
+                x=[start_x, end_x],
+                y=[start_y, end_y],
+                z=[0, 0],
+                mode='lines',
+                line=dict(color='orangered', width=3),
+                showlegend=(i == 0 and show_mode == 'both'),
+                name='σ₁ direction',
+                legendgroup='sigma1',
+                hoverinfo='skip'
+            ))
+
+    if show_mode in ['sigma_2', 'both']:
+        # Add σ₂ trajectories (cyan/blue)
+        for i in range(0, n_nodes, skip):
+            start_x = x[i] - principal['dir_2_x'][i] * arrow_length / 2
+            start_y = y[i] - principal['dir_2_y'][i] * arrow_length / 2
+            end_x = x[i] + principal['dir_2_x'][i] * arrow_length / 2
+            end_y = y[i] + principal['dir_2_y'][i] * arrow_length / 2
+
+            fig.add_trace(go.Scatter3d(
+                x=[start_x, end_x],
+                y=[start_y, end_y],
+                z=[0, 0],
+                mode='lines',
+                line=dict(color='cyan', width=3),
+                showlegend=(i == 0 and show_mode == 'both'),
+                name='σ₂ direction',
+                legendgroup='sigma2',
+                hoverinfo='skip'
+            ))
+
+    fig.update_layout(
+        title=dict(
+            text=title_text,
+            x=0.5,
+            xanchor='center'
+        ),
+        scene=dict(
+            xaxis=dict(title='X', showgrid=True, gridcolor='lightgray'),
+            yaxis=dict(title='Y', showgrid=True, gridcolor='lightgray'),
+            zaxis=dict(showticklabels=False, showgrid=False),
+            aspectmode='data',
+            camera=dict(
+                eye=dict(x=0, y=0, z=2.5),
+                up=dict(x=0, y=1, z=0),
+                center=dict(x=0, y=0, z=0),
+                projection=dict(type='orthographic')
+            )
+        ),
+        height=height,
+        margin=dict(l=0, r=0, t=40, b=0),
+        hovermode='closest',
+        legend=dict(
+            x=0.02,
+            y=0.98,
+            bgcolor='rgba(255,255,255,0.8)',
+            bordercolor='gray',
+            borderwidth=1
+        ) if show_mode == 'both' else None
+    )
+
+    return fig
+
+
+def verify_equilibrium(reactions, loads_array, nodes):
+    """
+    Verify global equilibrium: ΣFx = 0, ΣFy = 0, ΣM = 0
+
+    Parameters
+    ----------
+    reactions : ndarray
+        Reactions array (N x 3): [node_id, Rx, Ry]
+    loads_array : ndarray or None
+        Applied loads array (M x 3): [node_id, Fx, Fy]
+    nodes : ndarray
+        Nodes array with coordinates
+
+    Returns
+    -------
+    dict
+        Dictionary with equilibrium check results
+    """
+    # Sum of reaction forces
+    sum_Rx = np.sum(reactions[:, 1])
+    sum_Ry = np.sum(reactions[:, 2])
+
+    # Sum of applied loads
+    sum_Fx = 0.0
+    sum_Fy = 0.0
+    if loads_array is not None and len(loads_array) > 0:
+        sum_Fx = np.sum(loads_array[:, 1])
+        sum_Fy = np.sum(loads_array[:, 2])
+
+    # Total force balance
+    total_Fx = sum_Rx + sum_Fx
+    total_Fy = sum_Ry + sum_Fy
+
+    # Moment balance about origin (ΣM = Σ(x*Fy - y*Fx))
+    sum_M_reactions = 0.0
+    for reaction in reactions:
+        node_id = int(reaction[0])
+        x = nodes[node_id, 1]
+        y = nodes[node_id, 2]
+        Rx = reaction[1]
+        Ry = reaction[2]
+        sum_M_reactions += (x * Ry - y * Rx)
+
+    sum_M_loads = 0.0
+    if loads_array is not None and len(loads_array) > 0:
+        for load in loads_array:
+            node_id = int(load[0])
+            x = nodes[node_id, 1]
+            y = nodes[node_id, 2]
+            Fx = load[1]
+            Fy = load[2]
+            sum_M_loads += (x * Fy - y * Fx)
+
+    total_M = sum_M_reactions + sum_M_loads
+
+    return {
+        'sum_Fx': total_Fx,
+        'sum_Fy': total_Fy,
+        'sum_M': total_M,
+        'reaction_Fx': sum_Rx,
+        'reaction_Fy': sum_Ry,
+        'applied_Fx': sum_Fx,
+        'applied_Fy': sum_Fy,
+        'balanced': (abs(total_Fx) < 1e-6 and abs(total_Fy) < 1e-6 and abs(total_M) < 1e-6)
+    }
+
+
 def display_solver_results(results):
     """
     Display SolidsPy solver results in Streamlit with interactive Plotly visualizations.
@@ -736,13 +1362,13 @@ def display_solver_results(results):
         disp_mag = np.sqrt(disp[:, 0]**2 + disp[:, 1]**2)
 
         # Create tabs for different result types
-        tab1, tab2, tab3, tab4 = st.tabs(["🔵 Displacements", "🟢 Strains", "🔴 Stresses", "🟣 Principal Stresses"])
+        tab1, tab2, tab3, tab4, tab5 = st.tabs(["🔵 Displacements", "🟢 Strains", "🔴 Stresses", "🟣 Principal Stresses", "⚖️ Reactions"])
 
         with tab1:
             st.markdown("### Displacement Fields")
 
             # Sub-tabs for displacement components
-            subtab1, subtab2, subtab3 = st.tabs(["Magnitude", "X-Component", "Y-Component"])
+            subtab1, subtab2, subtab3, subtab4 = st.tabs(["Magnitude", "X-Component", "Y-Component", "Deformed Shape"])
 
             with subtab1:
                 fig = create_interactive_contour_plot(
@@ -770,6 +1396,54 @@ def display_solver_results(results):
                     height=700
                 )
                 st.plotly_chart(fig, use_container_width=True)
+
+            with subtab4:
+                st.markdown("#### Deformed Configuration")
+                st.info("💡 Adjust the scale factor to amplify the deformation for better visualization")
+
+                # Get max displacement for intelligent default scaling
+                max_disp = results['max_displacement']
+
+                # Compute characteristic dimension (to suggest reasonable scale factors)
+                coords = nodes[:, 1:3]
+                x_range = np.max(coords[:, 0]) - np.min(coords[:, 0])
+                y_range = np.max(coords[:, 1]) - np.min(coords[:, 1])
+                characteristic_length = max(x_range, y_range)
+
+                # Suggest scale factor: make max displacement ~5-10% of characteristic length
+                if max_disp > 0:
+                    suggested_scale = (0.05 * characteristic_length) / max_disp
+                    # Round to nice values
+                    magnitude = 10 ** np.floor(np.log10(suggested_scale))
+                    suggested_scale = np.round(suggested_scale / magnitude) * magnitude
+                else:
+                    suggested_scale = 1.0
+
+                # Display max displacement info
+                st.metric("Maximum Displacement", f"{max_disp:.3e} m")
+                st.metric("Suggested Scale Factor", f"{suggested_scale:.1f}x")
+
+                # Scale factor slider
+                scale_factor = st.slider(
+                    "Deformation Scale Factor",
+                    min_value=0.0,
+                    max_value=float(suggested_scale * 5),
+                    value=float(suggested_scale),
+                    step=float(suggested_scale / 20) if suggested_scale > 0 else 1.0,
+                    format="%.1f",
+                    key="deformation_scale_slider",
+                    help="Multiplier to amplify displacements for visualization. Does not affect computed values."
+                )
+
+                # Create deformed configuration plot
+                fig = create_deformed_configuration_plot(
+                    nodes, elements, disp,
+                    scale_factor=scale_factor,
+                    height=700
+                )
+                st.plotly_chart(fig, use_container_width=True)
+
+                st.caption(f"🔍 Gray mesh: Original configuration | Colored mesh: Deformed configuration (scale: {scale_factor}x)")
 
         with tab2:
             st.markdown("### Strain Fields")
@@ -976,7 +1650,7 @@ def display_solver_results(results):
             tau_max = R              # Maximum shear stress = (σ1 - σ2)/2
 
             # Sub-tabs for principal stress components
-            subtab1, subtab2, subtab3 = st.tabs(["σ₁ (Max Principal)", "σ₂ (Min Principal)", "τmax (Max Shear)"])
+            subtab1, subtab2, subtab3, subtab4 = st.tabs(["σ₁ (Max Principal)", "σ₂ (Min Principal)", "τmax (Max Shear)", "📐 Stress Trajectories"])
 
             with subtab1:
                 max_s1_stress_pa = float(np.max(np.abs(sigma_1)))
@@ -1340,6 +2014,146 @@ def display_solver_results(results):
                     )
                     st.plotly_chart(fig, use_container_width=True)
 
+            with subtab4:
+                st.markdown("#### Principal Stress Trajectories")
+
+                st.info("💡 **What are stress trajectories?** Lines showing the direction of principal stresses at each point. "
+                       "These reveal how stress flows through the structure - critical for understanding load paths and failure modes.")
+
+                st.markdown("""
+                **Educational Insight:**
+                - **Orange-red lines**: σ₁ direction (maximum principal stress - most critical for tensile failure)
+                - **Cyan lines**: σ₂ direction (minimum principal stress - perpendicular to σ₁)
+                - **Line direction**: Shows the axis along which the principal stress acts
+                - **Key concept**: σ₁ and σ₂ are always perpendicular (90°) to each other!
+                - Lines pass through each other forming an orthogonal grid pattern
+                """)
+
+                st.markdown("---")
+
+                # Choose which principal stress to show
+                trajectory_type = st.radio(
+                    "Select Visualization Mode:",
+                    ["Both σ₁ and σ₂ (Perpendicular)", "σ₁ Only (Maximum Principal)", "σ₂ Only (Minimum Principal)"],
+                    index=0,  # Default to showing both
+                    horizontal=False,
+                    help="Choose which principal stress directions to visualize"
+                )
+
+                # Map radio selection to show_mode parameter
+                if trajectory_type == "Both σ₁ and σ₂ (Perpendicular)":
+                    show_mode = 'both'
+                elif trajectory_type == "σ₁ Only (Maximum Principal)":
+                    show_mode = 'sigma_1'
+                else:  # "σ₂ Only (Minimum Principal)"
+                    show_mode = 'sigma_2'
+
+                # Create trajectory plot
+                fig = create_principal_stress_trajectories_plot(
+                    nodes, elements, stresses,
+                    height=700,
+                    show_mode=show_mode
+                )
+                st.plotly_chart(fig, use_container_width=True)
+
+                # Educational notes
+                st.markdown("---")
+                st.markdown("#### 📚 Understanding Stress Trajectories")
+
+                col1, col2 = st.columns(2)
+                with col1:
+                    st.markdown("""
+                    **Key Concepts:**
+                    - Principal stresses act on planes with zero shear stress
+                    - **σ₁ and σ₂ are ALWAYS perpendicular (90°)**
+                    - These directions are called "principal directions"
+                    - Stress trajectories show stress flow through structure
+                    - The perpendicular grid pattern demonstrates orthogonality
+                    """)
+                with col2:
+                    st.markdown("""
+                    **Applications:**
+                    - Optimizing material placement (e.g., fiber orientation in composites)
+                    - Understanding crack propagation paths
+                    - Designing reinforcement layouts in concrete
+                    - Identifying natural load paths in topology optimization
+                    - Photoelastic stress analysis validation
+                    """)
+
+                if show_mode == 'both':
+                    st.success("✅ **ORTHOGONALITY DEMONSTRATION**: Notice how orange-red (σ₁) and cyan (σ₂) lines form a perpendicular grid at every point!")
+                    st.caption("🔍 Mesh colored by Von Mises stress | Orange-red lines = σ₁ direction | Cyan lines = σ₂ direction (perpendicular to σ₁)")
+                else:
+                    st.caption("🔍 The mesh color shows the magnitude of the selected principal stress, while lines show its direction")
+
+        with tab5:
+            st.markdown("### Reaction Forces & Equilibrium")
+
+            # Get reactions and loads
+            reactions = results.get('reactions', np.array([[0, 0, 0]]))
+            loads_array = results.get('loads_array', None)
+
+            # Equilibrium check
+            st.markdown("#### ⚖️ Equilibrium Verification")
+            equilibrium = verify_equilibrium(reactions, loads_array, nodes)
+
+            col1, col2, col3 = st.columns(3)
+            with col1:
+                st.metric("ΣFx (Total)", f"{equilibrium['sum_Fx']:.3e} N")
+                st.caption(f"Reactions: {equilibrium['reaction_Fx']:.3e} N")
+                st.caption(f"Applied: {equilibrium['applied_Fx']:.3e} N")
+            with col2:
+                st.metric("ΣFy (Total)", f"{equilibrium['sum_Fy']:.3e} N")
+                st.caption(f"Reactions: {equilibrium['reaction_Fy']:.3e} N")
+                st.caption(f"Applied: {equilibrium['applied_Fy']:.3e} N")
+            with col3:
+                st.metric("ΣM (Total)", f"{equilibrium['sum_M']:.3e} N·m")
+
+            if equilibrium['balanced']:
+                st.success("✅ System is in equilibrium! (ΣFx ≈ 0, ΣFy ≈ 0, ΣM ≈ 0)")
+            else:
+                st.warning("⚠️ Equilibrium check shows non-zero residuals (may be numerical error)")
+
+            st.markdown("---")
+
+            # Reaction forces table
+            st.markdown("#### 📋 Reaction Forces at Constrained Nodes")
+
+            # Create DataFrame for better display
+            import pandas as pd
+            reaction_df = pd.DataFrame(reactions, columns=['Node ID', 'Rx (N)', 'Ry (N)'])
+            reaction_df['Node ID'] = reaction_df['Node ID'].astype(int)
+            reaction_df['Magnitude (N)'] = np.sqrt(reaction_df['Rx (N)']**2 + reaction_df['Ry (N)']**2)
+
+            st.dataframe(
+                reaction_df.style.format({
+                    'Rx (N)': '{:.3e}',
+                    'Ry (N)': '{:.3e}',
+                    'Magnitude (N)': '{:.3e}'
+                }),
+                use_container_width=True
+            )
+
+            # Download reactions as CSV
+            csv = reaction_df.to_csv(index=False)
+            st.download_button(
+                label="📥 Download Reactions (CSV)",
+                data=csv,
+                file_name="reaction_forces.csv",
+                mime="text/csv"
+            )
+
+            st.markdown("---")
+
+            # Visualization
+            st.markdown("#### 🎯 Force Diagram")
+            st.info("💡 Red arrows = Reaction forces | Green arrows = Applied loads")
+
+            fig = create_reaction_forces_plot(nodes, elements, reactions, loads_array, height=700)
+            st.plotly_chart(fig, use_container_width=True)
+
+            st.caption("🔍 Hover over arrows to see force values | Arrow length is proportional to force magnitude")
+
     except Exception as e:
         st.error(f"❌ Error generating interactive plots: {str(e)}")
         st.info("Field data is available in the results, but visualization failed.")
@@ -1362,7 +2176,7 @@ def main():
 
     # Sidebar
     with st.sidebar:
-        st.image("https://img.icons8.com/clouds/100/000000/engineering.png", width=100)
+ #       st.image("https://img.icons8.com/clouds/100/000000/engineering.png", width=100)
         st.title("Navigation")
 
         page = st.radio(
@@ -1376,7 +2190,7 @@ def main():
         if page == "📂 Load GEO File":
             st.info("💡 Upload your .geo file\n\n🔧 Define materials for physical groups\n\n🔒 Set boundary conditions\n\n⚡ Add loads\n\n✅ Generate mesh!")
         elif page == "📊 Analyze Existing Model":
-            st.info("💡 Upload SolidsPy txt files\n\n📂 Or load from folder\n\n🔬 Run FEA analysis\n\n📈 View results!")
+            st.info("💡 Upload SolidsPy txt files\n\n🔬 Run FEA analysis\n\n📈 View results!")
         else:
             st.info("💡 Start by selecting a geometry type\n\n📐 Adjust parameters in real-time\n\n🔒 Add boundary conditions\n\n⚡ Define loads\n\n✅ Generate your model!")
 
@@ -2223,146 +3037,64 @@ def show_analyze_existing():
     st.markdown("""
     This page allows you to run FEA analysis on **existing SolidsPy txt files**.
 
-    **Two options:**
-    1. **Upload Files**: Upload individual txt files (nodes, eles, mater, loads)
-    2. **Load from Folder**: Specify folder path and file prefix (like `solver.py`)
-
-    **Use case:** When you already have SolidsPy files and just want to run analysis and visualize results.
+    Upload your individual txt files (nodes, eles, mater, loads) to run analysis and visualize results.
     """)
 
     st.markdown("---")
 
-    # Choose input method
-    st.markdown('<p class="section-header">📥 Input Method</p>', unsafe_allow_html=True)
-
-    input_method = st.radio(
-        "How would you like to load the files?",
-        ["Upload Files", "Load from Folder"],
-        horizontal=True
-    )
-
-    st.markdown("---")
+    # Upload Files section
+    st.markdown('<p class="section-header">📂 Upload SolidsPy Files</p>', unsafe_allow_html=True)
 
     nodes_array = None
     elements_array = None
     materials_array = None
     loads_array = None
 
-    if input_method == "Upload Files":
-        st.markdown('<p class="section-header">📂 Upload SolidsPy Files</p>', unsafe_allow_html=True)
+    col1, col2 = st.columns(2)
 
-        col1, col2 = st.columns(2)
+    with col1:
+        st.markdown("**Required Files:**")
 
-        with col1:
-            st.markdown("**Required Files:**")
+        nodes_file = st.file_uploader("Nodes file (nodes.txt)", type=['txt'], key="nodes_upload")
+        eles_file = st.file_uploader("Elements file (eles.txt)", type=['txt'], key="eles_upload")
+        mater_file = st.file_uploader("Materials file (mater.txt)", type=['txt'], key="mater_upload")
 
-            nodes_file = st.file_uploader("Nodes file (nodes.txt)", type=['txt'], key="nodes_upload")
-            eles_file = st.file_uploader("Elements file (eles.txt)", type=['txt'], key="eles_upload")
-            mater_file = st.file_uploader("Materials file (mater.txt)", type=['txt'], key="mater_upload")
+    with col2:
+        st.markdown("**Optional Files:**")
 
-        with col2:
-            st.markdown("**Optional Files:**")
+        loads_file = st.file_uploader("Loads file (loads.txt)", type=['txt'], key="loads_upload")
+        st.info("💡 Loads file is optional. Analysis can run without loads (free vibration, etc.)")
 
-            loads_file = st.file_uploader("Loads file (loads.txt)", type=['txt'], key="loads_upload")
-            st.info("💡 Loads file is optional. Analysis can run without loads (free vibration, etc.)")
+    # Process uploaded files
+    if nodes_file and eles_file and mater_file:
+        try:
+            # Read uploaded files
+            from io import StringIO
 
-        # Process uploaded files
-        if nodes_file and eles_file and mater_file:
-            try:
-                # Read uploaded files
-                from io import StringIO
+            nodes_array = np.loadtxt(StringIO(nodes_file.getvalue().decode('utf-8')), ndmin=2)
+            elements_array = np.loadtxt(StringIO(eles_file.getvalue().decode('utf-8')), ndmin=2, dtype=int)
+            materials_array = np.loadtxt(StringIO(mater_file.getvalue().decode('utf-8')), ndmin=2)
 
-                nodes_array = np.loadtxt(StringIO(nodes_file.getvalue().decode('utf-8')), ndmin=2)
-                elements_array = np.loadtxt(StringIO(eles_file.getvalue().decode('utf-8')), ndmin=2, dtype=int)
-                materials_array = np.loadtxt(StringIO(mater_file.getvalue().decode('utf-8')), ndmin=2)
+            if loads_file:
+                loads_array = np.loadtxt(StringIO(loads_file.getvalue().decode('utf-8')), ndmin=2)
 
-                if loads_file:
-                    loads_array = np.loadtxt(StringIO(loads_file.getvalue().decode('utf-8')), ndmin=2)
+            st.success("✅ Files loaded successfully!")
 
-                st.success("✅ Files loaded successfully!")
+            # Show file info
+            st.markdown("---")
+            st.markdown('<p class="section-header">📋 Model Information</p>', unsafe_allow_html=True)
 
-                # Show file info
-                st.markdown("---")
-                st.markdown('<p class="section-header">📋 Model Information</p>', unsafe_allow_html=True)
+            col1, col2, col3 = st.columns(3)
+            with col1:
+                st.metric("Nodes", len(nodes_array))
+            with col2:
+                st.metric("Elements", len(elements_array))
+            with col3:
+                st.metric("Materials", len(materials_array))
 
-                col1, col2, col3 = st.columns(3)
-                with col1:
-                    st.metric("Nodes", len(nodes_array))
-                with col2:
-                    st.metric("Elements", len(elements_array))
-                with col3:
-                    st.metric("Materials", len(materials_array))
-
-            except Exception as e:
-                st.error(f"❌ Error loading files: {str(e)}")
-                st.info("Make sure files are in correct SolidsPy format")
-
-    else:  # Load from Folder
-        st.markdown('<p class="section-header">📂 Load from Folder</p>', unsafe_allow_html=True)
-
-        st.info("💡 This method loads files like: `folder/prefix_nodes.txt`, `folder/prefix_eles.txt`, etc.")
-
-        col1, col2 = st.columns(2)
-
-        with col1:
-            folder_path = st.text_input("Folder Path", value="./output", help="Path to folder containing SolidsPy files")
-
-        with col2:
-            file_prefix = st.text_input("File Prefix", value="", help="Prefix for files (e.g., 'Ho' for Honodes.txt, Hoeles.txt, ...)")
-
-        if st.button("📥 Load Files from Folder", use_container_width=True):
-            try:
-                folder = Path(folder_path)
-
-                if not folder.exists():
-                    st.error(f"❌ Folder not found: {folder_path}")
-                else:
-                    # Construct file paths
-                    nodes_path = folder / f"{file_prefix}nodes.txt"
-                    eles_path = folder / f"{file_prefix}eles.txt"
-                    mater_path = folder / f"{file_prefix}mater.txt"
-                    loads_path = folder / f"{file_prefix}loads.txt"
-
-                    # Check if required files exist
-                    if not nodes_path.exists():
-                        st.error(f"❌ Nodes file not found: {nodes_path}")
-                    elif not eles_path.exists():
-                        st.error(f"❌ Elements file not found: {eles_path}")
-                    elif not mater_path.exists():
-                        st.error(f"❌ Materials file not found: {mater_path}")
-                    else:
-                        # Load files
-                        nodes_array = np.loadtxt(str(nodes_path), ndmin=2)
-                        elements_array = np.loadtxt(str(eles_path), ndmin=2, dtype=int)
-                        materials_array = np.loadtxt(str(mater_path), ndmin=2)
-
-                        if loads_path.exists():
-                            loads_array = np.loadtxt(str(loads_path), ndmin=2)
-
-                        st.success(f"✅ Files loaded from: `{folder_path}/`")
-
-                        # Show file info
-                        st.markdown("---")
-                        st.markdown('<p class="section-header">📋 Model Information</p>', unsafe_allow_html=True)
-
-                        col1, col2, col3 = st.columns(3)
-                        with col1:
-                            st.metric("Nodes", len(nodes_array))
-                        with col2:
-                            st.metric("Elements", len(elements_array))
-                        with col3:
-                            st.metric("Materials", len(materials_array))
-
-                        st.markdown("**Files loaded:**")
-                        st.markdown(f"- `{nodes_path}`")
-                        st.markdown(f"- `{eles_path}`")
-                        st.markdown(f"- `{mater_path}`")
-                        if loads_path.exists():
-                            st.markdown(f"- `{loads_path}`")
-
-            except Exception as e:
-                st.error(f"❌ Error loading files: {str(e)}")
-                st.info("Make sure files exist and are in correct SolidsPy format")
+        except Exception as e:
+            st.error(f"❌ Error loading files: {str(e)}")
+            st.info("Make sure files are in correct SolidsPy format")
 
     # Run Solver
     if nodes_array is not None and elements_array is not None and materials_array is not None:
