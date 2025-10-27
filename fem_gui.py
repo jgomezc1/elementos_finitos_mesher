@@ -538,6 +538,156 @@ def create_interactive_contour_plot(nodes, elements, field_values, title, colorb
     return fig
 
 
+def create_filtered_contour_plot(nodes, elements, field_values, title, colorbar_title, threshold=None, threshold_type='above', height=700):
+    """
+    Create an interactive Plotly contour plot with binary threshold filtering.
+    Regions exceeding threshold shown in red, safe regions in gray.
+
+    Parameters
+    ----------
+    nodes : ndarray
+        Nodes array with coordinates
+    elements : ndarray
+        Elements array with connectivity
+    field_values : ndarray
+        Field values at nodes (1D array)
+    title : str
+        Plot title
+    colorbar_title : str
+        Label for colorbar
+    threshold : float, optional
+        Threshold value for filtering
+    threshold_type : str
+        'above' to highlight values above threshold, 'below' for below threshold
+    height : int
+        Plot height in pixels
+
+    Returns
+    -------
+    fig : plotly.graph_objects.Figure
+        Interactive Plotly figure
+    stats : dict
+        Statistics about threshold exceedance
+    """
+    import plotly.graph_objects as go
+
+    # Extract coordinates
+    x = nodes[:, 1]
+    y = nodes[:, 2]
+
+    # Get element connectivity (triangles)
+    triangles = elements[:, 3:6].astype(int)
+
+    # Apply binary threshold filtering
+    stats = {}
+
+    if threshold is not None:
+        if threshold_type == 'above':
+            mask = field_values >= threshold
+
+            stats['exceeding_nodes'] = np.sum(mask)
+            stats['total_nodes'] = len(field_values)
+            stats['percentage'] = (stats['exceeding_nodes'] / stats['total_nodes']) * 100
+            stats['threshold'] = threshold
+            stats['type'] = 'above'
+        else:  # 'below'
+            mask = field_values <= threshold
+
+            stats['exceeding_nodes'] = np.sum(mask)
+            stats['total_nodes'] = len(field_values)
+            stats['percentage'] = (stats['exceeding_nodes'] / stats['total_nodes']) * 100
+            stats['threshold'] = threshold
+            stats['type'] = 'below'
+
+        # Compute per-triangle status (if ANY vertex exceeds, mark the triangle as exceeding)
+        triangle_exceeds = []
+        for tri in triangles:
+            # Check if any vertex of this triangle exceeds the threshold
+            if np.any(mask[tri]):
+                triangle_exceeds.append('red')
+            else:
+                triangle_exceeds.append('lightgray')
+
+        # Create mesh with per-face coloring
+        fig = go.Figure(data=go.Mesh3d(
+            x=x,
+            y=y,
+            z=np.zeros_like(x),
+            i=triangles[:, 0],
+            j=triangles[:, 1],
+            k=triangles[:, 2],
+            facecolor=triangle_exceeds,  # Use facecolor for per-triangle coloring
+            hovertemplate='<b>X</b>: %{x:.3f}<br><b>Y</b>: %{y:.3f}<br><extra></extra>',
+            showscale=False,  # No colorbar needed for categorical colors
+            flatshading=True  # No interpolation between vertices
+        ))
+
+        # Add a custom legend
+        # Add dummy traces for legend
+        fig.add_trace(go.Scatter3d(
+            x=[None], y=[None], z=[None],
+            mode='markers',
+            marker=dict(size=10, color='red'),
+            name=f'Exceeds {threshold/1e6:.1f} MPa',
+            showlegend=True
+        ))
+        fig.add_trace(go.Scatter3d(
+            x=[None], y=[None], z=[None],
+            mode='markers',
+            marker=dict(size=10, color='lightgray'),
+            name='Within Limit',
+            showlegend=True
+        ))
+
+        # Add title with threshold info
+        plot_title = f"{title} - Limit: {threshold/1e6:.2f} MPa"
+    else:
+        # No threshold - use regular continuous color scale
+        fig = go.Figure(data=go.Mesh3d(
+            x=x,
+            y=y,
+            z=np.zeros_like(x),
+            i=triangles[:, 0],
+            j=triangles[:, 1],
+            k=triangles[:, 2],
+            intensity=field_values,
+            colorscale='RdYlBu_r',
+            colorbar=dict(
+                title=dict(text=colorbar_title, side='right'),
+                tickformat='.2e',
+                thickness=20,
+                len=0.7
+            ),
+            hovertemplate='<b>Value</b>: %{intensity:.3e}<br>' +
+                          '<b>X</b>: %{x:.3f}<br>' +
+                          '<b>Y</b>: %{y:.3f}<br>' +
+                          '<extra></extra>',
+            showscale=True
+        ))
+        plot_title = title
+
+    fig.update_layout(
+        title=dict(text=plot_title, x=0.5, xanchor='center'),
+        scene=dict(
+            xaxis=dict(title='X', showgrid=False),
+            yaxis=dict(title='Y', showgrid=False),
+            zaxis=dict(showticklabels=False, showgrid=False),
+            aspectmode='data',
+            camera=dict(
+                eye=dict(x=0, y=0, z=2.5),
+                up=dict(x=0, y=1, z=0),  # Y-axis points up
+                center=dict(x=0, y=0, z=0),
+                projection=dict(type='orthographic')
+            )
+        ),
+        height=height,
+        margin=dict(l=0, r=0, t=40, b=0),
+        hovermode='closest'
+    )
+
+    return fig, stats
+
+
 def display_solver_results(results):
     """
     Display SolidsPy solver results in Streamlit with interactive Plotly visualizations.
@@ -667,14 +817,120 @@ def display_solver_results(results):
             subtab1, subtab2, subtab3, subtab4 = st.tabs(["Von Mises", "σ-xx", "σ-yy", "τ-xy"])
 
             with subtab1:
-                fig = create_interactive_contour_plot(
-                    nodes, elements, von_mises,
-                    "Von Mises Stress",
-                    "σ (Pa)",
-                    height=700
+                max_vm_stress_pa = float(np.max(np.abs(von_mises)))
+                max_vm_stress_mpa = max_vm_stress_pa / 1e6
+
+                # Format MPa display based on magnitude
+                if max_vm_stress_mpa >= 0.1:
+                    mpa_display = f"{max_vm_stress_mpa:.2f} MPa"
+                else:
+                    mpa_display = f"{max_vm_stress_mpa:.6f} MPa ({max_vm_stress_mpa:.3e} MPa)"
+
+                st.info(f"💡 Max Von Mises Stress: {max_vm_stress_pa:.3e} Pa = {mpa_display}")
+
+                # Filter controls
+                st.markdown("---")
+                st.markdown("##### 🎯 Failure Analysis Filter")
+
+                # Always use slider with intelligent range and step size
+                if max_vm_stress_mpa < 0.001:
+                    # Very small stresses - use micro range
+                    slider_max = max(0.001, max_vm_stress_mpa * 1.5)
+                    slider_step = slider_max / 1000
+                    default_value = max_vm_stress_mpa * 0.7 if max_vm_stress_mpa > 0 else slider_max * 0.5
+                elif max_vm_stress_mpa < 0.1:
+                    # Small stresses - use fine resolution
+                    slider_max = max(0.1, max_vm_stress_mpa * 1.2)
+                    slider_step = slider_max / 1000
+                    default_value = max_vm_stress_mpa * 0.7
+                else:
+                    # Normal stresses
+                    slider_max = max_vm_stress_mpa
+                    slider_step = slider_max / 100
+                    default_value = max_vm_stress_mpa * 0.7
+
+                threshold_mpa = st.slider(
+                    "Set Stress Limit (MPa)",
+                    min_value=0.0,
+                    max_value=float(slider_max),
+                    value=float(default_value),
+                    step=float(slider_step),
+                    format="%.6f",
+                    key="vm_threshold_slider",
+                    help="Drag to set the stress limit. Regions in RED exceed this limit."
                 )
-                st.plotly_chart(fig, use_container_width=True)
-                st.info(f"💡 Max Von Mises Stress: {np.max(von_mises):.3e} Pa ({np.max(von_mises)/1e6:.2f} MPa)")
+
+                enable_filter = st.toggle("Show Filtered View (Red = Exceeds Limit, Gray = Safe)", value=False, key="vm_filter_toggle")
+                st.markdown("---")
+
+                # Create plot based on filter state
+                if enable_filter:
+                    st.success(f"✅ FILTERED VIEW ACTIVE - Limit: {threshold_mpa:.1f} MPa")
+                    threshold_pa = threshold_mpa * 1e6
+
+                    # Create binary mask
+                    mask = von_mises >= threshold_pa
+                    exceeding_count = np.sum(mask)
+                    percentage = (exceeding_count / len(von_mises)) * 100
+
+                    # Color each triangle
+                    triangle_colors = []
+                    for tri in elements[:, 3:6].astype(int):
+                        if np.any(mask[tri]):
+                            triangle_colors.append('red')
+                        else:
+                            triangle_colors.append('lightgray')
+
+                    # Create figure
+                    import plotly.graph_objects as go
+                    x = nodes[:, 1]
+                    y = nodes[:, 2]
+                    triangles = elements[:, 3:6].astype(int)
+
+                    fig = go.Figure(data=go.Mesh3d(
+                        x=x, y=y, z=np.zeros_like(x),
+                        i=triangles[:, 0],
+                        j=triangles[:, 1],
+                        k=triangles[:, 2],
+                        facecolor=triangle_colors,
+                        flatshading=True,
+                        showscale=False
+                    ))
+
+                    fig.update_layout(
+                        title=f"Von Mises Stress - Filtered (Limit: {threshold_mpa:.1f} MPa)",
+                        scene=dict(
+                            xaxis=dict(title='X', showgrid=False),
+                            yaxis=dict(title='Y', showgrid=False),
+                            zaxis=dict(showticklabels=False, showgrid=False),
+                            aspectmode='data',
+                            camera=dict(
+                                eye=dict(x=0, y=0, z=2.5),
+                                up=dict(x=0, y=1, z=0),
+                                center=dict(x=0, y=0, z=0),
+                                projection=dict(type='orthographic')
+                            )
+                        ),
+                        height=700,
+                        margin=dict(l=0, r=0, t=40, b=0),
+                        hovermode='closest'
+                    )
+
+                    st.plotly_chart(fig, use_container_width=True)
+
+                    if percentage > 0:
+                        st.error(f"🚨 **{exceeding_count} nodes ({percentage:.1f}%)** exceed the stress limit!")
+                    else:
+                        st.success(f"✅ All regions are within the stress limit")
+                else:
+                    st.info("ℹ️ CONTINUOUS VIEW - Enable filter above to identify overstressed regions")
+                    fig = create_interactive_contour_plot(
+                        nodes, elements, von_mises,
+                        "Von Mises Stress",
+                        "σ (Pa)",
+                        height=700
+                    )
+                    st.plotly_chart(fig, use_container_width=True)
 
             with subtab2:
                 fig = create_interactive_contour_plot(
@@ -723,34 +979,366 @@ def display_solver_results(results):
             subtab1, subtab2, subtab3 = st.tabs(["σ₁ (Max Principal)", "σ₂ (Min Principal)", "τmax (Max Shear)"])
 
             with subtab1:
-                fig = create_interactive_contour_plot(
-                    nodes, elements, sigma_1,
-                    "Maximum Principal Stress (σ₁)",
-                    "σ₁ (Pa)",
-                    height=700
+                max_s1_stress_pa = float(np.max(np.abs(sigma_1)))
+                max_s1_stress_mpa = max_s1_stress_pa / 1e6
+                min_s1_stress_pa = float(np.min(sigma_1))
+                min_s1_stress_mpa = min_s1_stress_pa / 1e6
+
+                # Format MPa display based on magnitude
+                if max_s1_stress_mpa >= 0.1:
+                    max_mpa_display = f"{max_s1_stress_mpa:.2f} MPa"
+                else:
+                    max_mpa_display = f"{max_s1_stress_mpa:.6f} MPa ({max_s1_stress_mpa:.3e} MPa)"
+
+                if abs(min_s1_stress_mpa) >= 0.1:
+                    min_mpa_display = f"{min_s1_stress_mpa:.2f} MPa"
+                else:
+                    min_mpa_display = f"{min_s1_stress_mpa:.6f} MPa ({min_s1_stress_mpa:.3e} MPa)"
+
+                st.info(f"💡 Max σ₁: {max_s1_stress_pa:.3e} Pa = {max_mpa_display} | Min σ₁: {min_s1_stress_pa:.3e} Pa = {min_mpa_display}")
+
+                # Filter controls
+                st.markdown("---")
+                st.markdown("##### 🎯 Failure Analysis Filter")
+
+                # Always use slider with intelligent range and step size
+                if max_s1_stress_mpa < 0.001:
+                    # Very small stresses - use micro range
+                    slider_max = max(0.001, max_s1_stress_mpa * 1.5)
+                    slider_step = slider_max / 1000
+                    default_value = max_s1_stress_mpa * 0.7 if max_s1_stress_mpa > 0 else slider_max * 0.5
+                elif max_s1_stress_mpa < 0.1:
+                    # Small stresses - use fine resolution
+                    slider_max = max(0.1, max_s1_stress_mpa * 1.2)
+                    slider_step = slider_max / 1000
+                    default_value = max_s1_stress_mpa * 0.7
+                else:
+                    # Normal stresses
+                    slider_max = max_s1_stress_mpa
+                    slider_step = slider_max / 100
+                    default_value = max_s1_stress_mpa * 0.7
+
+                threshold_mpa_s1 = st.slider(
+                    "Set Stress Limit (MPa)",
+                    min_value=0.0,
+                    max_value=float(slider_max),
+                    value=float(default_value),
+                    step=float(slider_step),
+                    format="%.6f",
+                    key="s1_threshold_slider",
+                    help="Drag to set the stress limit. Regions in RED exceed this limit."
                 )
-                st.plotly_chart(fig, use_container_width=True)
-                st.info(f"💡 Max σ₁: {np.max(sigma_1):.3e} Pa ({np.max(sigma_1)/1e6:.2f} MPa) | Min σ₁: {np.min(sigma_1):.3e} Pa ({np.min(sigma_1)/1e6:.2f} MPa)")
+
+                enable_filter_s1 = st.toggle("Show Filtered View (Red = Exceeds Limit, Gray = Safe)", value=False, key="s1_filter_toggle")
+                st.markdown("---")
+
+                # Create plot based on filter state
+                if enable_filter_s1:
+                    st.success(f"✅ FILTERED VIEW ACTIVE - Limit: {threshold_mpa_s1:.1f} MPa")
+                    threshold_pa_s1 = threshold_mpa_s1 * 1e6
+
+                    # Create binary mask
+                    mask = sigma_1 >= threshold_pa_s1
+                    exceeding_count = np.sum(mask)
+                    percentage = (exceeding_count / len(sigma_1)) * 100
+
+                    # Color each triangle
+                    triangle_colors = []
+                    for tri in elements[:, 3:6].astype(int):
+                        if np.any(mask[tri]):
+                            triangle_colors.append('red')
+                        else:
+                            triangle_colors.append('lightgray')
+
+                    # Create figure
+                    import plotly.graph_objects as go
+                    x = nodes[:, 1]
+                    y = nodes[:, 2]
+                    triangles = elements[:, 3:6].astype(int)
+
+                    fig = go.Figure(data=go.Mesh3d(
+                        x=x, y=y, z=np.zeros_like(x),
+                        i=triangles[:, 0],
+                        j=triangles[:, 1],
+                        k=triangles[:, 2],
+                        facecolor=triangle_colors,
+                        flatshading=True,
+                        showscale=False
+                    ))
+
+                    fig.update_layout(
+                        title=f"Maximum Principal Stress (σ₁) - Filtered (Limit: {threshold_mpa_s1:.1f} MPa)",
+                        scene=dict(
+                            xaxis=dict(title='X', showgrid=False),
+                            yaxis=dict(title='Y', showgrid=False),
+                            zaxis=dict(showticklabels=False, showgrid=False),
+                            aspectmode='data',
+                            camera=dict(
+                                eye=dict(x=0, y=0, z=2.5),
+                                up=dict(x=0, y=1, z=0),
+                                center=dict(x=0, y=0, z=0),
+                                projection=dict(type='orthographic')
+                            )
+                        ),
+                        height=700,
+                        margin=dict(l=0, r=0, t=40, b=0),
+                        hovermode='closest'
+                    )
+
+                    st.plotly_chart(fig, use_container_width=True)
+
+                    if percentage > 0:
+                        st.error(f"🚨 **{exceeding_count} nodes ({percentage:.1f}%)** exceed the stress limit!")
+                    else:
+                        st.success(f"✅ All regions are within the stress limit")
+                else:
+                    st.info("ℹ️ CONTINUOUS VIEW - Enable filter above to identify overstressed regions")
+                    fig = create_interactive_contour_plot(
+                        nodes, elements, sigma_1,
+                        "Maximum Principal Stress (σ₁)",
+                        "σ₁ (Pa)",
+                        height=700
+                    )
+                    st.plotly_chart(fig, use_container_width=True)
 
             with subtab2:
-                fig = create_interactive_contour_plot(
-                    nodes, elements, sigma_2,
-                    "Minimum Principal Stress (σ₂)",
-                    "σ₂ (Pa)",
-                    height=700
+                max_s2_stress_pa = float(np.max(np.abs(sigma_2)))
+                max_s2_stress_mpa = max_s2_stress_pa / 1e6
+                min_s2_stress_pa = float(np.min(sigma_2))
+                min_s2_stress_mpa = min_s2_stress_pa / 1e6
+
+                # Format MPa display based on magnitude
+                if max_s2_stress_mpa >= 0.1:
+                    max_mpa_display = f"{max_s2_stress_mpa:.2f} MPa"
+                else:
+                    max_mpa_display = f"{max_s2_stress_mpa:.6f} MPa ({max_s2_stress_mpa:.3e} MPa)"
+
+                if abs(min_s2_stress_mpa) >= 0.1:
+                    min_mpa_display = f"{min_s2_stress_mpa:.2f} MPa"
+                else:
+                    min_mpa_display = f"{min_s2_stress_mpa:.6f} MPa ({min_s2_stress_mpa:.3e} MPa)"
+
+                st.info(f"💡 Max σ₂: {max_s2_stress_pa:.3e} Pa = {max_mpa_display} | Min σ₂: {min_s2_stress_pa:.3e} Pa = {min_mpa_display}")
+
+                # Filter controls
+                st.markdown("---")
+                st.markdown("##### 🎯 Failure Analysis Filter")
+
+                # Always use slider with intelligent range and step size
+                if max_s2_stress_mpa < 0.001:
+                    # Very small stresses - use micro range
+                    slider_max = max(0.001, max_s2_stress_mpa * 1.5)
+                    slider_step = slider_max / 1000
+                    default_value = max_s2_stress_mpa * 0.7 if max_s2_stress_mpa > 0 else slider_max * 0.5
+                elif max_s2_stress_mpa < 0.1:
+                    # Small stresses - use fine resolution
+                    slider_max = max(0.1, max_s2_stress_mpa * 1.2)
+                    slider_step = slider_max / 1000
+                    default_value = max_s2_stress_mpa * 0.7
+                else:
+                    # Normal stresses
+                    slider_max = max_s2_stress_mpa
+                    slider_step = slider_max / 100
+                    default_value = max_s2_stress_mpa * 0.7
+
+                threshold_mpa_s2 = st.slider(
+                    "Set Stress Limit (MPa)",
+                    min_value=0.0,
+                    max_value=float(slider_max),
+                    value=float(default_value),
+                    step=float(slider_step),
+                    format="%.6f",
+                    key="s2_threshold_slider",
+                    help="Drag to set the stress limit. Regions in RED exceed this limit."
                 )
-                st.plotly_chart(fig, use_container_width=True)
-                st.info(f"💡 Max σ₂: {np.max(sigma_2):.3e} Pa ({np.max(sigma_2)/1e6:.2f} MPa) | Min σ₂: {np.min(sigma_2):.3e} Pa ({np.min(sigma_2)/1e6:.2f} MPa)")
+
+                enable_filter_s2 = st.toggle("Show Filtered View (Red = Exceeds Limit, Gray = Safe)", value=False, key="s2_filter_toggle")
+                st.markdown("---")
+
+                # Create plot based on filter state
+                if enable_filter_s2:
+                    st.success(f"✅ FILTERED VIEW ACTIVE - Limit: {threshold_mpa_s2:.1f} MPa")
+                    threshold_pa_s2 = threshold_mpa_s2 * 1e6
+
+                    # Create binary mask
+                    mask = np.abs(sigma_2) >= threshold_pa_s2  # Use absolute value for σ₂
+                    exceeding_count = np.sum(mask)
+                    percentage = (exceeding_count / len(sigma_2)) * 100
+
+                    # Color each triangle
+                    triangle_colors = []
+                    for tri in elements[:, 3:6].astype(int):
+                        if np.any(mask[tri]):
+                            triangle_colors.append('red')
+                        else:
+                            triangle_colors.append('lightgray')
+
+                    # Create figure
+                    import plotly.graph_objects as go
+                    x = nodes[:, 1]
+                    y = nodes[:, 2]
+                    triangles = elements[:, 3:6].astype(int)
+
+                    fig = go.Figure(data=go.Mesh3d(
+                        x=x, y=y, z=np.zeros_like(x),
+                        i=triangles[:, 0],
+                        j=triangles[:, 1],
+                        k=triangles[:, 2],
+                        facecolor=triangle_colors,
+                        flatshading=True,
+                        showscale=False
+                    ))
+
+                    fig.update_layout(
+                        title=f"Minimum Principal Stress (σ₂) - Filtered (Limit: {threshold_mpa_s2:.1f} MPa)",
+                        scene=dict(
+                            xaxis=dict(title='X', showgrid=False),
+                            yaxis=dict(title='Y', showgrid=False),
+                            zaxis=dict(showticklabels=False, showgrid=False),
+                            aspectmode='data',
+                            camera=dict(
+                                eye=dict(x=0, y=0, z=2.5),
+                                up=dict(x=0, y=1, z=0),
+                                center=dict(x=0, y=0, z=0),
+                                projection=dict(type='orthographic')
+                            )
+                        ),
+                        height=700,
+                        margin=dict(l=0, r=0, t=40, b=0),
+                        hovermode='closest'
+                    )
+
+                    st.plotly_chart(fig, use_container_width=True)
+
+                    if percentage > 0:
+                        st.error(f"🚨 **{exceeding_count} nodes ({percentage:.1f}%)** exceed the stress limit!")
+                    else:
+                        st.success(f"✅ All regions are within the stress limit")
+                else:
+                    st.info("ℹ️ CONTINUOUS VIEW - Enable filter above to identify overstressed regions")
+                    fig = create_interactive_contour_plot(
+                        nodes, elements, sigma_2,
+                        "Minimum Principal Stress (σ₂)",
+                        "σ₂ (Pa)",
+                        height=700
+                    )
+                    st.plotly_chart(fig, use_container_width=True)
 
             with subtab3:
-                fig = create_interactive_contour_plot(
-                    nodes, elements, tau_max,
-                    "Maximum Shear Stress (τmax)",
-                    "τmax (Pa)",
-                    height=700
+                max_tmax_stress_pa = float(np.max(np.abs(tau_max)))
+                max_tmax_stress_mpa = max_tmax_stress_pa / 1e6
+
+                # Format MPa display based on magnitude
+                if max_tmax_stress_mpa >= 0.1:
+                    mpa_display = f"{max_tmax_stress_mpa:.2f} MPa"
+                else:
+                    mpa_display = f"{max_tmax_stress_mpa:.6f} MPa ({max_tmax_stress_mpa:.3e} MPa)"
+
+                st.info(f"💡 Max τmax: {max_tmax_stress_pa:.3e} Pa = {mpa_display}")
+
+                # Filter controls
+                st.markdown("---")
+                st.markdown("##### 🎯 Shear Failure Analysis Filter")
+
+                # Always use slider with intelligent range and step size
+                if max_tmax_stress_mpa < 0.001:
+                    # Very small stresses - use micro range
+                    slider_max = max(0.001, max_tmax_stress_mpa * 1.5)
+                    slider_step = slider_max / 1000
+                    default_value = max_tmax_stress_mpa * 0.7 if max_tmax_stress_mpa > 0 else slider_max * 0.5
+                elif max_tmax_stress_mpa < 0.1:
+                    # Small stresses - use fine resolution
+                    slider_max = max(0.1, max_tmax_stress_mpa * 1.2)
+                    slider_step = slider_max / 1000
+                    default_value = max_tmax_stress_mpa * 0.7
+                else:
+                    # Normal stresses
+                    slider_max = max_tmax_stress_mpa
+                    slider_step = slider_max / 100
+                    default_value = max_tmax_stress_mpa * 0.7
+
+                threshold_mpa_tmax = st.slider(
+                    "Set Shear Strength Limit (MPa)",
+                    min_value=0.0,
+                    max_value=float(slider_max),
+                    value=float(default_value),
+                    step=float(slider_step),
+                    format="%.6f",
+                    key="tmax_threshold_slider",
+                    help="Drag to set the shear strength limit. Regions in RED exceed this limit."
                 )
-                st.plotly_chart(fig, use_container_width=True)
-                st.info(f"💡 Max τmax: {np.max(tau_max):.3e} Pa ({np.max(tau_max)/1e6:.2f} MPa)")
+
+                enable_filter_tmax = st.toggle("Show Filtered View (Red = Exceeds Limit, Gray = Safe)", value=False, key="tmax_filter_toggle")
+                st.markdown("---")
+
+                # Create plot based on filter state
+                if enable_filter_tmax:
+                    st.success(f"✅ FILTERED VIEW ACTIVE - Shear Limit: {threshold_mpa_tmax:.1f} MPa")
+                    threshold_pa_tmax = threshold_mpa_tmax * 1e6
+
+                    # Create binary mask
+                    mask = tau_max >= threshold_pa_tmax
+                    exceeding_count = np.sum(mask)
+                    percentage = (exceeding_count / len(tau_max)) * 100
+
+                    # Color each triangle
+                    triangle_colors = []
+                    for tri in elements[:, 3:6].astype(int):
+                        if np.any(mask[tri]):
+                            triangle_colors.append('red')
+                        else:
+                            triangle_colors.append('lightgray')
+
+                    # Create figure
+                    import plotly.graph_objects as go
+                    x = nodes[:, 1]
+                    y = nodes[:, 2]
+                    triangles = elements[:, 3:6].astype(int)
+
+                    fig = go.Figure(data=go.Mesh3d(
+                        x=x, y=y, z=np.zeros_like(x),
+                        i=triangles[:, 0],
+                        j=triangles[:, 1],
+                        k=triangles[:, 2],
+                        facecolor=triangle_colors,
+                        flatshading=True,
+                        showscale=False
+                    ))
+
+                    fig.update_layout(
+                        title=f"Maximum Shear Stress (τmax) - Filtered (Limit: {threshold_mpa_tmax:.1f} MPa)",
+                        scene=dict(
+                            xaxis=dict(title='X', showgrid=False),
+                            yaxis=dict(title='Y', showgrid=False),
+                            zaxis=dict(showticklabels=False, showgrid=False),
+                            aspectmode='data',
+                            camera=dict(
+                                eye=dict(x=0, y=0, z=2.5),
+                                up=dict(x=0, y=1, z=0),
+                                center=dict(x=0, y=0, z=0),
+                                projection=dict(type='orthographic')
+                            )
+                        ),
+                        height=700,
+                        margin=dict(l=0, r=0, t=40, b=0),
+                        hovermode='closest'
+                    )
+
+                    st.plotly_chart(fig, use_container_width=True)
+
+                    if percentage > 0:
+                        st.error(f"🚨 **FAILURE RISK: {exceeding_count} nodes ({percentage:.1f}%)** exceed shear strength limit!")
+                    else:
+                        st.success(f"✅ All regions are within the shear strength limit")
+                else:
+                    st.info("ℹ️ CONTINUOUS VIEW - Enable filter above to identify overstressed regions")
+                    fig = create_interactive_contour_plot(
+                        nodes, elements, tau_max,
+                        "Maximum Shear Stress (τmax)",
+                        "τmax (Pa)",
+                        height=700
+                    )
+                    st.plotly_chart(fig, use_container_width=True)
 
     except Exception as e:
         st.error(f"❌ Error generating interactive plots: {str(e)}")
@@ -1120,8 +1708,13 @@ def show_model_builder():
                             loads_array
                         )
 
-                        # Display results
-                        display_solver_results(results)
+                        # Cache results in session state so filter interactions don't rerun solver
+                        st.session_state.solver_results = results
+                        st.session_state.solver_run_complete = True
+
+                # Display results if available (use cached results on rerun from filter interactions)
+                if st.session_state.get('solver_run_complete', False):
+                    display_solver_results(st.session_state.solver_results)
             else:
                 st.markdown("---")
                 st.warning("⚠️ SolidsPy not available. Solver functionality disabled.")
@@ -1608,8 +2201,13 @@ def show_geo_loader():
                             loads_array
                         )
 
-                        # Display results
-                        display_solver_results(results)
+                        # Cache results in session state so filter interactions don't rerun solver
+                        st.session_state.solver_results_geo = results
+                        st.session_state.solver_run_complete_geo = True
+
+                # Display results if available (use cached results on rerun from filter interactions)
+                if st.session_state.get('solver_run_complete_geo', False):
+                    display_solver_results(st.session_state.solver_results_geo)
             else:
                 st.markdown("---")
                 st.warning("⚠️ SolidsPy not available. Solver functionality disabled.")
@@ -1784,8 +2382,13 @@ def show_analyze_existing():
                         loads_array
                     )
 
-                    # Display results
-                    display_solver_results(results)
+                    # Cache results in session state so filter interactions don't rerun solver
+                    st.session_state.solver_results_existing = results
+                    st.session_state.solver_run_complete_existing = True
+
+            # Display results if available (use cached results on rerun from filter interactions)
+            if st.session_state.get('solver_run_complete_existing', False):
+                display_solver_results(st.session_state.solver_results_existing)
         else:
             st.markdown("---")
             st.warning("⚠️ SolidsPy not available. Solver functionality disabled.")
