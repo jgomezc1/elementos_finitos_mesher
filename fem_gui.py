@@ -2020,15 +2020,6 @@ def display_solver_results(results):
                 st.info("💡 **What are stress trajectories?** Lines showing the direction of principal stresses at each point. "
                        "These reveal how stress flows through the structure - critical for understanding load paths and failure modes.")
 
-                st.markdown("""
-                **Educational Insight:**
-                - **Orange-red lines**: σ₁ direction (maximum principal stress - most critical for tensile failure)
-                - **Cyan lines**: σ₂ direction (minimum principal stress - perpendicular to σ₁)
-                - **Line direction**: Shows the axis along which the principal stress acts
-                - **Key concept**: σ₁ and σ₂ are always perpendicular (90°) to each other!
-                - Lines pass through each other forming an orthogonal grid pattern
-                """)
-
                 st.markdown("---")
 
                 # Choose which principal stress to show
@@ -2055,30 +2046,6 @@ def display_solver_results(results):
                     show_mode=show_mode
                 )
                 st.plotly_chart(fig, use_container_width=True)
-
-                # Educational notes
-                st.markdown("---")
-                st.markdown("#### 📚 Understanding Stress Trajectories")
-
-                col1, col2 = st.columns(2)
-                with col1:
-                    st.markdown("""
-                    **Key Concepts:**
-                    - Principal stresses act on planes with zero shear stress
-                    - **σ₁ and σ₂ are ALWAYS perpendicular (90°)**
-                    - These directions are called "principal directions"
-                    - Stress trajectories show stress flow through structure
-                    - The perpendicular grid pattern demonstrates orthogonality
-                    """)
-                with col2:
-                    st.markdown("""
-                    **Applications:**
-                    - Optimizing material placement (e.g., fiber orientation in composites)
-                    - Understanding crack propagation paths
-                    - Designing reinforcement layouts in concrete
-                    - Identifying natural load paths in topology optimization
-                    - Photoelastic stress analysis validation
-                    """)
 
                 if show_mode == 'both':
                     st.success("✅ **ORTHOGONALITY DEMONSTRATION**: Notice how orange-red (σ₁) and cyan (σ₂) lines form a perpendicular grid at every point!")
