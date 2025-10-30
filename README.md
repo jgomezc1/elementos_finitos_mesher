@@ -89,20 +89,34 @@ elementos_finitos_mesher/
 │
 ├── fem_converter.py          # Main conversion script
 ├── fem_config.py             # Configuration schema
+├── fem_gui.py                # Streamlit GUI application
 ├── geo_generator.py          # GMSH .geo generator
 ├── fem_templates.py          # Python template library
 ├── preprocesor.py            # Mesh processing
 │
-├── examples/                 # Example configurations
+├── examples/                 # Example YAML configurations
+├── Geo_files/                # GMSH geometry files for "Load GEO File" option
+├── existing/                 # Folder for SolidsPy input files to analyze
 ├── docs/                     # Documentation
+├── solidspy/                 # FEA solver library
+├── templates/                # GMSH geometry templates
+├── output/                   # Working directory for generated files
 └── requirements.txt          # Dependencies
 ```
+
+## Folders for GUI Usage
+
+- **`Geo_files/`** - Place your GMSH .geo files here for the "Load GEO File" option
+  - Includes example geometries: dam, flamant, inclusion, pilotes, ring
+- **`existing/`** - Place your SolidsPy .txt files here for the "Analyze Existing Model" option
+  - Upload nodes.txt, eles.txt, mater.txt, loads.txt for direct analysis
 
 ## Examples
 
 See [`examples/`](examples/) directory:
 - `layered_plate.yaml` - Multi-material plate
 - `simple_plate.yaml` - Cantilever beam
+- `lshape.yaml` - L-shaped structure
 - `create_layered_plate.py` - Python API example
 - `create_cantilever.py` - Python API example
 

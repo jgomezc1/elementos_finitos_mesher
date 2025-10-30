@@ -51,7 +51,7 @@ except Exception as e:
 
 # Page configuration
 st.set_page_config(
-    page_title="SolidsPy based FEM Builder",
+    page_title="SolidsPy Based FEM Builder",
     page_icon="🔧",
     layout="wide",
     initial_sidebar_state="expanded"
@@ -2148,7 +2148,7 @@ def main():
 
         page = st.radio(
             "Choose a page:",
-            ["🏗️ Model Builder", "📂 Load GEO File", "📊 Analyze Existing Model", "📚 Load Example", "ℹ️ About"],
+            ["🏗️ Model Builder", "📂 Load GEO File", "📊 Analyze Existing Model", "ℹ️ About"],
             index=0
         )
 
@@ -2167,8 +2167,6 @@ def main():
         show_geo_loader()
     elif page == "📊 Analyze Existing Model":
         show_analyze_existing()
-    elif page == "📚 Load Example":
-        show_examples()
     else:
         show_about()
 
@@ -3160,7 +3158,7 @@ def show_about():
     **License:** Part of elementos_finitos_mesher toolkit
     """)
 
-    st.info("💡 **Tip:** Start with an example model from the 'Load Example' page to see how it works!")
+    st.info("💡 **Tip:** Start with the 'Model Builder' to create your first FEM model, or use 'Load GEO File' to import existing geometries from the Geo_files folder!")
 
 
 if __name__ == "__main__":
