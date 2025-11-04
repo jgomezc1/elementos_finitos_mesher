@@ -232,13 +232,26 @@ class FEMConfig(BaseModel):
     @classmethod
     def from_yaml(cls, yaml_path: str) -> 'FEMConfig':
         """Load configuration from YAML file"""
-        with open(yaml_path, 'r') as f:
-            data = yaml.safe_load(f)
+        # Try multiple encodings to handle different file sources
+        encodings_to_try = ['utf-8', 'iso-8859-1', 'windows-1252', 'latin-1']
+        data = None
+
+        for encoding in encodings_to_try:
+            try:
+                with open(yaml_path, 'r', encoding=encoding) as f:
+                    data = yaml.safe_load(f)
+                break
+            except (UnicodeDecodeError, AttributeError):
+                continue
+
+        if data is None:
+            raise ValueError(f"Could not decode YAML file with any of: {', '.join(encodings_to_try)}")
+
         return cls(**data)
 
     def to_yaml(self, yaml_path: str):
         """Save configuration to YAML file"""
-        with open(yaml_path, 'w') as f:
+        with open(yaml_path, 'w', encoding='utf-8') as f:
             yaml.dump(
                 self.dict(exclude_none=True),
                 f,

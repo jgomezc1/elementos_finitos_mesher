@@ -4,12 +4,12 @@
 c = 5.0; 						// for size elements
 
 // Define vertex points 						
-Point(1) = {-50.0,-150.0, 0, c};		        // {x,y,z, size}
-Point(2) = {100.0,-150.0, 0, c};
-Point(3) = {100.0, 0.000, 0, c};
+Point(1) = {-100.0,-150.0, 0, c};		        // {x,y,z, size}
+Point(2) = {200.0,-150.0, 0, c};
+Point(3) = {200.0, 0.000, 0, c};
 Point(4) = {50.00, 0.000, 0, c};
 Point(5) = {0.000, 0.000, 0, c};
-Point(6) = {-50.0, 0.000, 0, c};
+Point(6) = {-100.0, 0.000, 0, c};
 Point(7) = { 50.0, 100.0, 0, c};
 Point(8) = { 25.0, 100.0, 0, c};
 
@@ -44,6 +44,6 @@ Physical Surface(100) = {1};
 Physical Surface(200) = {2};
 
 //Physical line. Boundary 
-Physical Line(1000) = {1};
-Physical Line(2000) = {2,6};
-Physical Line(5000) = {7};
+Physical Line(1000) = {1};   //Bottom boundary
+Physical Line(2000) = {2,6}; //Right and left boundaries
+Physical Line(5000) = {7};   //Dam-vertical wall

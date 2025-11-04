@@ -504,7 +504,7 @@ streamlit run fem_gui.py
 pip install -r requirements.txt
 
 # Launch application
-streamlit run fem_gui.py
+EOoZeyBCbfPHP4jfJAWrcIZ1Dj6jeb2SOpLnleYxnww3SDZE#2UodvdL0cW5lDx3AHSKGrNIpvOVvMYQMTtCyG-sRhU4
 ```
 
 ### **Stopping the Application**

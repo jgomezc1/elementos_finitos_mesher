@@ -51,7 +51,7 @@ except Exception as e:
 
 # Page configuration
 st.set_page_config(
-    page_title="SolidsPy Based FEM Builder",
+    page_title="SolidsPy Based FEM Solver",
     page_icon="🔧",
     layout="wide",
     initial_sidebar_state="expanded"
@@ -2138,7 +2138,7 @@ def main():
     initialize_session_state()
 
     # Header
-    st.markdown('<p class="main-header">🔧 SolidsPy based FEM Builder</p>', unsafe_allow_html=True)
+    st.markdown('<p class="main-header">🔧 SolidsPy Based FEM Solver</p>', unsafe_allow_html=True)
     st.markdown("---")
 
     # Sidebar
@@ -2554,13 +2554,42 @@ def show_geo_loader():
     geo_filename = None
 
     if uploaded_file is not None:
-        geo_content = uploaded_file.read().decode('utf-8')
+        # Try multiple encodings to handle different file sources
+        file_bytes = uploaded_file.read()
+        geo_content = None
+        encodings_to_try = ['utf-8', 'iso-8859-1', 'windows-1252', 'latin-1']
+
+        for encoding in encodings_to_try:
+            try:
+                geo_content = file_bytes.decode(encoding)
+                break
+            except (UnicodeDecodeError, AttributeError):
+                continue
+
+        if geo_content is None:
+            st.error(f"❌ Could not decode file. Tried encodings: {', '.join(encodings_to_try)}")
+            return
+
         geo_filename = uploaded_file.name
         st.success(f"✅ Loaded: {geo_filename}")
     elif selected_template:
         geo_path = templates_path / selected_template
-        with open(geo_path, 'r') as f:
-            geo_content = f.read()
+        # Try multiple encodings for template files too
+        geo_content = None
+        encodings_to_try = ['utf-8', 'iso-8859-1', 'windows-1252', 'latin-1']
+
+        for encoding in encodings_to_try:
+            try:
+                with open(geo_path, 'r', encoding=encoding) as f:
+                    geo_content = f.read()
+                break
+            except (UnicodeDecodeError, AttributeError):
+                continue
+
+        if geo_content is None:
+            st.error(f"❌ Could not decode template file. Tried encodings: {', '.join(encodings_to_try)}")
+            return
+
         geo_filename = selected_template
         st.success(f"✅ Loaded: {geo_filename}")
 
@@ -3108,10 +3137,22 @@ def show_examples():
     example_path = Path(examples[selected_example])
 
     if example_path.exists():
-        with open(example_path, 'r') as f:
-            content = f.read()
+        # Try multiple encodings for example files
+        content = None
+        encodings_to_try = ['utf-8', 'iso-8859-1', 'windows-1252', 'latin-1']
 
-        st.code(content, language="yaml")
+        for encoding in encodings_to_try:
+            try:
+                with open(example_path, 'r', encoding=encoding) as f:
+                    content = f.read()
+                break
+            except (UnicodeDecodeError, AttributeError):
+                continue
+
+        if content is None:
+            st.error(f"❌ Could not decode example file.")
+        else:
+            st.code(content, language="yaml")
 
         if st.button("Load This Example"):
             st.session_state.yaml_content = content
@@ -3123,10 +3164,10 @@ def show_examples():
 
 def show_about():
     """Show about page"""
-    st.markdown('<p class="section-header">ℹ️ About SolidsPy based FEM Builder</p>', unsafe_allow_html=True)
+    st.markdown('<p class="section-header">ℹ️ About SolidsPy Based FEM Solver</p>', unsafe_allow_html=True)
 
     st.markdown("""
-    ### Welcome to the SolidsPy based FEM Builder!
+    ### Welcome to the SolidsPy Based FEM Solver!
 
     This interactive tool helps you create finite element models without writing code.
 
