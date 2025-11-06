@@ -213,30 +213,37 @@ def create_material_inputs(geometry_type):
             with col4:
                 physical_id = st.number_input(f"Physical ID", value=i+1, step=1, key=f"phys_id_{i}")
 
-            col1, col2 = st.columns(2)
+            col1, col2, col3 = st.columns(3)
             with col1:
                 E = st.number_input(f"Young's Modulus (Pa)", value=1.0e6*(i+1), format="%.2e", key=f"E_{i}")
             with col2:
                 nu = st.number_input(f"Poisson's Ratio", min_value=0.0, max_value=0.49, value=0.3, step=0.01, key=f"nu_{i}", format="%.3f")
+            with col3:
+                density = st.number_input(f"Density (kg/m³)", value=0.0, min_value=0.0, format="%.2f", key=f"density_{i}",
+                                         help="Material density for body force calculation")
 
             materials.append({
                 'name': name,
                 'region': [y_min, y_max],
                 'physical_id': physical_id,
                 'E': E,
-                'nu': nu
+                'nu': nu,
+                'density': density
             })
             st.divider()
 
     else:
         # Single material
-        col1, col2 = st.columns(2)
+        col1, col2, col3 = st.columns(3)
         with col1:
             E = st.number_input("Young's Modulus (Pa)", value=2.1e11, format="%.2e")
         with col2:
             nu = st.number_input("Poisson's Ratio", min_value=0.0, max_value=0.49, value=0.3, step=0.01, format="%.3f")
+        with col3:
+            density = st.number_input("Density (kg/m³)", value=0.0, min_value=0.0, format="%.2f",
+                                     help="Material density for body force calculation (0 = no body forces)")
 
-        materials = {'E': E, 'nu': nu}
+        materials = {'E': E, 'nu': nu, 'density': density}
 
     return materials
 
@@ -342,7 +349,48 @@ def create_mesh_inputs():
     }
 
 
-def build_yaml_config(model_name, description, geometry_type, geom_params, materials, bcs, loads, mesh_params):
+def create_body_force_inputs():
+    """Create body force (gravity) parameter inputs"""
+    st.markdown('<p class="section-header">⚖️ Body Forces (Gravity)</p>', unsafe_allow_html=True)
+
+    enable_body_forces = st.checkbox("Enable Body Forces", value=False,
+                                     help="Apply gravity or acceleration forces to elements based on material density")
+
+    if enable_body_forces:
+        st.info("💡 Body forces will be computed as: F = ρ × g × Volume, where ρ is material density")
+
+        col1, col2 = st.columns(2)
+        with col1:
+            grav_x = st.number_input("Gravity X (m/s²)", value=0.0, format="%.2f",
+                                    help="Horizontal acceleration (0 for standard gravity)")
+        with col2:
+            grav_y = st.number_input("Gravity Y (m/s²)", value=-9.81, format="%.2f",
+                                    help="Vertical acceleration (-9.81 for Earth's gravity)")
+
+        # Store in session state for solver
+        st.session_state.apply_body_forces = True
+        st.session_state.gravity_x = grav_x
+        st.session_state.gravity_y = grav_y
+
+        return {
+            'enabled': True,
+            'gravity_x': grav_x,
+            'gravity_y': grav_y
+        }
+    else:
+        # Store in session state for solver
+        st.session_state.apply_body_forces = False
+        st.session_state.gravity_x = 0.0
+        st.session_state.gravity_y = -9.81
+
+        return {
+            'enabled': False,
+            'gravity_x': 0.0,
+            'gravity_y': -9.81
+        }
+
+
+def build_yaml_config(model_name, description, geometry_type, geom_params, materials, bcs, loads, mesh_params, body_force_params=None):
     """Build YAML configuration dictionary"""
     config = {
         'model_name': model_name,
@@ -361,7 +409,7 @@ def build_yaml_config(model_name, description, geometry_type, geom_params, mater
                 'name': mat['name'],
                 'region': mat['region'],
                 'physical_id': mat['physical_id'],
-                'material': {'E': mat['E'], 'nu': mat['nu']}
+                'material': {'E': mat['E'], 'nu': mat['nu'], 'density': mat.get('density', 0.0)}
             }
             for mat in materials
         ]
@@ -375,6 +423,10 @@ def build_yaml_config(model_name, description, geometry_type, geom_params, mater
     # Add loads
     if loads:
         config['loads'] = loads
+
+    # Add body forces
+    if body_force_params:
+        config['body_force'] = body_force_params
 
     return config
 
@@ -452,7 +504,8 @@ def calculate_reaction_forces(nodes_array, elements_array, materials_array,
         return np.array([[0, 0, 0]])  # No reactions
 
 
-def run_solidspy_solver(nodes_array, elements_array, materials_array, loads_array):
+def run_solidspy_solver(nodes_array, elements_array, materials_array, loads_array,
+                        apply_body_forces=False, grav_x=0.0, grav_y=-9.81):
     """
     Run SolidsPy FEA solver on the generated mesh.
 
@@ -466,6 +519,12 @@ def run_solidspy_solver(nodes_array, elements_array, materials_array, loads_arra
         Materials array (K x 3): [E, nu, density]
     loads_array : ndarray or None
         Loads array (L x 3): [node_id, fx, fy]
+    apply_body_forces : bool, optional
+        Whether to apply body forces (gravity). Default: False
+    grav_x : float, optional
+        Gravity acceleration in x-direction (m/s²). Default: 0.0
+    grav_y : float, optional
+        Gravity acceleration in y-direction (m/s²). Default: -9.81
 
     Returns
     -------
@@ -479,6 +538,7 @@ def run_solidspy_solver(nodes_array, elements_array, materials_array, loads_arra
         - 'elements': ndarray (elements for plotting)
         - 'max_displacement': float
         - 'max_stress': float
+        - 'body_forces_applied': bool
         - 'error': str (if failed)
     """
     if not SOLIDSPY_AVAILABLE:
@@ -498,6 +558,13 @@ def run_solidspy_solver(nodes_array, elements_array, materials_array, loads_arra
         if loads_array is None or len(loads_array) == 0:
             loads_array = np.zeros((1, 3))
         RHSG = ass.loadasem(loads_array, IBC, neq)
+
+        # Step 3b: Add body forces if enabled
+        if apply_body_forces:
+            RHSG_body = ass.body_force_assembler(elements_array, materials_array,
+                                                  nodes_array, neq, DME,
+                                                  grav_x=grav_x, grav_y=grav_y)
+            RHSG = RHSG + RHSG_body
 
         # Step 4: Solve system of equations
         UG = sol.static_sol(KG, RHSG)
@@ -528,7 +595,8 @@ def run_solidspy_solver(nodes_array, elements_array, materials_array, loads_arra
             'loads_array': loads_array,
             'max_displacement': max_disp,
             'max_stress': max_stress,
-            'neq': neq
+            'neq': neq,
+            'body_forces_applied': apply_body_forces
         }
 
     except Exception as e:
@@ -2232,6 +2300,11 @@ def show_model_builder():
 
     st.markdown("---")
 
+    # Body force parameters
+    body_force_params = create_body_force_inputs()
+
+    st.markdown("---")
+
     # Generate button
     col1, col2, col3 = st.columns([1, 2, 1])
     with col2:
@@ -2240,7 +2313,7 @@ def show_model_builder():
                 # Build YAML config
                 config_dict = build_yaml_config(
                     model_name, description, geometry_type,
-                    geom_params, materials, bcs, loads, mesh_params
+                    geom_params, materials, bcs, loads, mesh_params, body_force_params
                 )
 
                 # Convert to YAML string
@@ -2479,12 +2552,20 @@ def show_model_builder():
                         materials_array = st.session_state.output_arrays['materials']
                         loads_array = st.session_state.output_arrays.get('loads')
 
+                        # Get body force settings from session state
+                        apply_body_forces = st.session_state.get('apply_body_forces', False)
+                        grav_x = st.session_state.get('gravity_x', 0.0)
+                        grav_y = st.session_state.get('gravity_y', -9.81)
+
                         # Run solver
                         results = run_solidspy_solver(
                             nodes_array,
                             elements_array,
                             materials_array,
-                            loads_array
+                            loads_array,
+                            apply_body_forces=apply_body_forces,
+                            grav_x=grav_x,
+                            grav_y=grav_y
                         )
 
                         # Cache results in session state so filter interactions don't rerun solver
@@ -2658,17 +2739,21 @@ def show_geo_loader():
 
             for name, pid in phys_surfaces:
                 st.markdown(f"**Physical Surface ID {pid}: {name if name else 'unnamed'}**")
-                col1, col2 = st.columns(2)
+                col1, col2, col3 = st.columns(3)
                 with col1:
                     E = st.number_input(f"Young's Modulus (Pa)", value=2.1e11, format="%.2e", key=f"E_{pid}")
                 with col2:
                     nu = st.number_input(f"Poisson's Ratio", min_value=0.0, max_value=0.49, value=0.3, step=0.01, format="%.3f", key=f"nu_{pid}")
+                with col3:
+                    density = st.number_input(f"Density (kg/m³)", value=0.0, min_value=0.0, format="%.2f", key=f"density_{pid}",
+                                             help="Material density for body forces")
 
                 materials.append({
                     'physical_id': int(pid),
                     'name': name if name else f'material_{pid}',
                     'E': E,
-                    'nu': nu
+                    'nu': nu,
+                    'density': density
                 })
                 st.divider()
         else:
@@ -2743,6 +2828,32 @@ def show_geo_loader():
                 index=0,
                 help="Triangle for standard meshes, Quad if GEO file uses 'Recombine Surface'"
             )
+
+        st.markdown("---")
+
+        # Body force settings
+        st.markdown('<p class="section-header">⚖️ Body Forces (Gravity)</p>', unsafe_allow_html=True)
+
+        enable_body_forces_geo = st.checkbox("Enable Body Forces", value=False, key="enable_bf_geo",
+                                            help="Apply gravity forces based on material density")
+
+        if enable_body_forces_geo:
+            st.info("💡 Body forces will be computed as: F = ρ × g × Volume")
+
+            col1, col2 = st.columns(2)
+            with col1:
+                grav_x_geo = st.number_input("Gravity X (m/s²)", value=0.0, format="%.2f", key="gx_geo")
+            with col2:
+                grav_y_geo = st.number_input("Gravity Y (m/s²)", value=-9.81, format="%.2f", key="gy_geo")
+
+            # Store in session state
+            st.session_state.apply_body_forces = True
+            st.session_state.gravity_x = grav_x_geo
+            st.session_state.gravity_y = grav_y_geo
+        else:
+            st.session_state.apply_body_forces = False
+            st.session_state.gravity_x = 0.0
+            st.session_state.gravity_y = -9.81
 
         st.markdown("---")
 
@@ -2846,11 +2957,12 @@ def show_geo_loader():
                                 if loads_list:
                                     loads_array = np.vstack(loads_list)
 
-                            # Create materials array (only E and nu for SolidsPy)
-                            materials_array = np.zeros((len(materials), 2))
+                            # Create materials array (E, nu, density for body forces)
+                            materials_array = np.zeros((len(materials), 3))
                             for i, mat in enumerate(materials):
                                 materials_array[i, 0] = mat['E']
                                 materials_array[i, 1] = mat['nu']
+                                materials_array[i, 2] = mat.get('density', 0.0)
 
                             # Save to strings
                             from io import StringIO
@@ -3001,12 +3113,20 @@ def show_geo_loader():
                         materials_array = st.session_state.output_arrays['materials']
                         loads_array = st.session_state.output_arrays.get('loads')
 
+                        # Get body force settings from session state
+                        apply_body_forces = st.session_state.get('apply_body_forces', False)
+                        grav_x = st.session_state.get('gravity_x', 0.0)
+                        grav_y = st.session_state.get('gravity_y', -9.81)
+
                         # Run solver
                         results = run_solidspy_solver(
                             nodes_array,
                             elements_array,
                             materials_array,
-                            loads_array
+                            loads_array,
+                            apply_body_forces=apply_body_forces,
+                            grav_x=grav_x,
+                            grav_y=grav_y
                         )
 
                         # Cache results in session state so filter interactions don't rerun solver
@@ -3094,18 +3214,52 @@ def show_analyze_existing():
     if nodes_array is not None and elements_array is not None and materials_array is not None:
         if SOLIDSPY_AVAILABLE:
             st.markdown("---")
+
+            # Body force settings for existing model
+            st.markdown('<p class="section-header">⚖️ Body Forces (Gravity)</p>', unsafe_allow_html=True)
+
+            enable_body_forces_existing = st.checkbox("Enable Body Forces", value=False, key="enable_bf_existing",
+                                                      help="Apply gravity forces based on material density (3rd column in mater.txt)")
+
+            if enable_body_forces_existing:
+                st.info("💡 Ensure your materials file (mater.txt) has 3 columns: [E, nu, density]")
+
+                col1, col2 = st.columns(2)
+                with col1:
+                    grav_x_existing = st.number_input("Gravity X (m/s²)", value=0.0, format="%.2f", key="gx_existing")
+                with col2:
+                    grav_y_existing = st.number_input("Gravity Y (m/s²)", value=-9.81, format="%.2f", key="gy_existing")
+
+                # Store in session state
+                st.session_state.apply_body_forces_existing = True
+                st.session_state.gravity_x_existing = grav_x_existing
+                st.session_state.gravity_y_existing = grav_y_existing
+            else:
+                st.session_state.apply_body_forces_existing = False
+                st.session_state.gravity_x_existing = 0.0
+                st.session_state.gravity_y_existing = -9.81
+
+            st.markdown("---")
             st.markdown('<p class="section-header">🔬 Run FEA Analysis</p>', unsafe_allow_html=True)
 
             st.info("💡 Click below to run SolidsPy solver on the loaded model")
 
             if st.button("🚀 Run SolidsPy Solver", key="solve_existing", use_container_width=True):
                 with st.spinner("Running FEA analysis..."):
+                    # Get body force settings from session state
+                    apply_body_forces = st.session_state.get('apply_body_forces_existing', False)
+                    grav_x = st.session_state.get('gravity_x_existing', 0.0)
+                    grav_y = st.session_state.get('gravity_y_existing', -9.81)
+
                     # Run solver
                     results = run_solidspy_solver(
                         nodes_array,
                         elements_array,
                         materials_array,
-                        loads_array
+                        loads_array,
+                        apply_body_forces=apply_body_forces,
+                        grav_x=grav_x,
+                        grav_y=grav_y
                     )
 
                     # Cache results in session state so filter interactions don't rerun solver

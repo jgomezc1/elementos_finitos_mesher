@@ -111,7 +111,7 @@ def retriever(elements , mats , nodes , i, uel=None):
     ndof, nnodes, ngpts = fem.eletype(iet)
     elcoor = np.zeros([nnodes, 2])
     im = int(elements[i, 2])
-    par0, par1 = mats[im, :]
+    par0, par1 = mats[im, 0], mats[im, 1]  # Extract only E and nu (ignore density if present)
     for j in range(nnodes):
         IELCON[j] = elements[i, j+3]
         elcoor[j, 0] = nodes[IELCON[j], 1]
@@ -306,6 +306,140 @@ def loadasem(loads, IBC, neq):
             RHSG[ily] = loads[i, 2]
 
     return RHSG
+
+
+def body_force_assembler(elements, mats, nodes, neq, DME, grav_x=0.0, grav_y=-9.81):
+    """
+    Assembles the body force vector due to gravity or acceleration.
+
+    This function computes equivalent nodal forces from body forces
+    (gravity, acceleration) applied to the elements. It assumes triangular
+    elements and distributes the force based on element area and material density.
+
+    Parameters
+    ----------
+    elements : ndarray (int)
+        Array with the number for the nodes in each element.
+        Format: [ele_id, ele_type, mat_id, node1, node2, node3, ...]
+    mats : ndarray (float)
+        Array with the material profiles.
+        Format: [E, nu, density] where density is mass per unit volume.
+        If density column is missing, assumes zero density (no body forces).
+    nodes : ndarray (float)
+        Array with the nodal coordinates.
+        Format: [node_id, x, y, bc_x, bc_y]
+    neq : int
+        Number of active equations in the system.
+    DME : ndarray (int)
+        Assembly operator (Degrees of freedom mapping for elements).
+    grav_x : float, optional
+        Gravity/acceleration in x-direction (m/s²). Default: 0.0
+    grav_y : float, optional
+        Gravity/acceleration in y-direction (m/s²). Default: -9.81
+
+    Returns
+    -------
+    RHSG_body : ndarray
+        Body force vector (right-hand side contribution).
+
+    Notes
+    -----
+    - For 2D plane stress/strain, body force per unit volume is: f = ρ * g
+    - The force is distributed to element nodes using consistent formulation
+    - For triangular elements, centroid-based distribution is used
+    - Element area is computed from nodal coordinates
+
+    Examples
+    --------
+    >>> # Apply gravity in y-direction with density in materials array
+    >>> body_forces = body_force_assembler(elements, mats, nodes, neq, DME,
+    ...                                     grav_x=0.0, grav_y=-9.81)
+    >>> # Add to total load vector
+    >>> RHSG_total = RHSG_applied + body_forces
+
+    """
+    RHSG_body = np.zeros(neq)
+    nels = elements.shape[0]
+
+    # Check if density information is available
+    if mats.shape[1] < 3:
+        # No density information, return zero vector
+        return RHSG_body
+
+    for el in range(nels):
+        # Get material ID for this element
+        mat_id = int(elements[el, 2])
+
+        # Get material density (third column in mats array)
+        if mat_id < len(mats):
+            density = mats[mat_id, 2]
+        else:
+            density = 0.0
+
+        # Skip if no density
+        if density == 0.0:
+            continue
+
+        # Get element type
+        ele_type = int(elements[el, 1])
+
+        # Get node indices for this element (columns 3 onwards)
+        if ele_type == 1:  # Linear triangle (3 nodes)
+            node_indices = elements[el, 3:6].astype(int)
+            nnodes = 3
+        elif ele_type == 2:  # Linear quadrilateral (4 nodes)
+            node_indices = elements[el, 3:7].astype(int)
+            nnodes = 4
+        elif ele_type == 3:  # Quadratic triangle (6 nodes)
+            node_indices = elements[el, 3:9].astype(int)
+            nnodes = 6
+        else:
+            continue  # Unsupported element type
+
+        # Get nodal coordinates
+        verts = nodes[node_indices, 1:3]
+
+        # Calculate element area
+        if nnodes == 3:  # Triangle
+            # Area = 0.5 * |det([[x1, y1, 1], [x2, y2, 1], [x3, y3, 1]])|
+            area = 0.5 * abs(np.linalg.det(np.column_stack((verts, np.ones(3)))))
+        elif nnodes == 4:  # Quadrilateral (approximate)
+            # Split into two triangles and sum
+            area1 = 0.5 * abs(np.linalg.det(np.column_stack((verts[[0,1,2], :], np.ones(3)))))
+            area2 = 0.5 * abs(np.linalg.det(np.column_stack((verts[[0,2,3], :], np.ones(3)))))
+            area = area1 + area2
+        elif nnodes == 6:  # Quadratic triangle (use corner nodes)
+            area = 0.5 * abs(np.linalg.det(np.column_stack((verts[[0,1,2], :], np.ones(3)))))
+        else:
+            continue
+
+        # Body force per unit volume
+        force_x_vol = density * grav_x
+        force_y_vol = density * grav_y
+
+        # Total force on element
+        total_force_x = force_x_vol * area
+        total_force_y = force_y_vol * area
+
+        # Distribute equally to nodes (simplified consistent approach)
+        force_per_node_x = total_force_x / nnodes
+        force_per_node_y = total_force_y / nnodes
+
+        # Assemble into global force vector
+        dme = DME[el, :nnodes*2]
+        for i in range(nnodes):
+            # x-direction DOF
+            glob_dof_x = dme[2*i]
+            if glob_dof_x != -1:
+                RHSG_body[glob_dof_x] += force_per_node_x
+
+            # y-direction DOF
+            glob_dof_y = dme[2*i + 1]
+            if glob_dof_y != -1:
+                RHSG_body[glob_dof_y] += force_per_node_y
+
+    return RHSG_body
+
 
 if __name__ == "__main__":
     import doctest

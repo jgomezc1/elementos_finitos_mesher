@@ -200,21 +200,23 @@ class FEMConverter:
         return nodes_array, elements_array, loads_array, materials_array
 
     def _create_materials_array(self):
-        """Create materials array for SolidsPy"""
+        """Create materials array for SolidsPy (E, nu, density)"""
         if self.config.layers:
             # One material per layer
             n_materials = len(self.config.layers)
-            materials = np.zeros((n_materials, 2))
+            materials = np.zeros((n_materials, 3))
 
             for i, layer in enumerate(self.config.layers):
                 materials[i, 0] = layer.material.E
                 materials[i, 1] = layer.material.nu
+                materials[i, 2] = layer.material.density if layer.material.density else 0.0
 
         else:
             # Single material
-            materials = np.zeros((1, 2))
+            materials = np.zeros((1, 3))
             materials[0, 0] = self.config.material.E
             materials[0, 1] = self.config.material.nu
+            materials[0, 2] = self.config.material.density if self.config.material.density else 0.0
 
         return materials
 

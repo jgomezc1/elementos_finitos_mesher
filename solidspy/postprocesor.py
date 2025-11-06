@@ -360,7 +360,8 @@ def strain_nodes(nodes, elements, mats, UC):
     IELCON = elements[:, 3:]
 
     for i in range(nelems):
-        young, poisson = mats[int(elements[i, 2]), :]
+        mat_id = int(elements[i, 2])
+        young, poisson = mats[mat_id, 0], mats[mat_id, 1]  # Extract only E and nu (ignore density if present)
         shear = young/(2*(1 + poisson))
         fact1 = young/(1 - poisson**2)
         fact2 = poisson*young/(1 - poisson**2)
@@ -544,7 +545,7 @@ def stress_truss(nodes, elements, mats, disp):
         tan_vec = coords[1, :] - coords[0, :]
         length = np.linalg.norm(tan_vec)
         mat_id = elements[cont, 2]
-        local_stiff = uel.ueltruss2D(coords, * mats[mat_id, :])
+        local_stiff = uel.ueltruss2D(coords, * mats[mat_id, :2])  # Use only E and nu
         local_disp = np.hstack((disp[ini, :], disp[end, :]))
         local_forces = local_stiff.dot(local_disp)
         stress[cont] = local_forces[2:].dot(tan_vec)/(length*mats[mat_id, 1])

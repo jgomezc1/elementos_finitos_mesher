@@ -13,6 +13,7 @@ class Material(BaseModel):
     """Material properties"""
     E: float = Field(..., description="Young's modulus", gt=0)
     nu: float = Field(..., description="Poisson's ratio", ge=0, lt=0.5)
+    density: Optional[float] = Field(None, description="Material density (mass per unit volume)", gt=0)
 
     class Config:
         extra = "forbid"
@@ -144,6 +145,16 @@ class Load(BaseModel):
         extra = "forbid"
 
 
+class BodyForce(BaseModel):
+    """Body force configuration (gravity, acceleration, etc.)"""
+    enabled: bool = Field(False, description="Enable body forces")
+    gravity_x: float = Field(0.0, description="Gravity acceleration in x-direction (m/s²)")
+    gravity_y: float = Field(-9.81, description="Gravity acceleration in y-direction (m/s²)")
+
+    class Config:
+        extra = "forbid"
+
+
 class MeshParameters(BaseModel):
     """Mesh generation parameters"""
     size: float = Field(..., gt=0, description="Characteristic mesh size")
@@ -170,6 +181,7 @@ class FEMConfig(BaseModel):
 
     boundary_conditions: List[BoundaryCondition]
     loads: Optional[List[Load]] = None
+    body_force: Optional[BodyForce] = Field(default_factory=lambda: BodyForce(enabled=False))
 
     @validator('layers')
     def validate_layers_or_material(cls, v, values):
