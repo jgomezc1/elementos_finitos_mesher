@@ -157,35 +157,35 @@ def create_geometry_params(geometry_type):
     if geometry_type == "rectangle":
         col1, col2 = st.columns(2)
         with col1:
-            params['length'] = st.number_input("Length (m)", min_value=0.1, value=2.0, step=0.1)
+            params['length'] = st.number_input("Length [L]", min_value=0.1, value=2.0, step=0.1)
         with col2:
-            params['height'] = st.number_input("Height (m)", min_value=0.1, value=1.0, step=0.1)
+            params['height'] = st.number_input("Height [L]", min_value=0.1, value=1.0, step=0.1)
 
     elif geometry_type == "layered_plate":
         col1, col2 = st.columns(2)
         with col1:
-            params['length'] = st.number_input("Length (m)", min_value=0.1, value=2.0, step=0.1)
+            params['length'] = st.number_input("Length [L]", min_value=0.1, value=2.0, step=0.1)
         with col2:
-            params['height'] = st.number_input("Height (m)", min_value=0.1, value=1.0, step=0.1)
+            params['height'] = st.number_input("Height [L]", min_value=0.1, value=1.0, step=0.1)
 
     elif geometry_type == "lshape":
         col1, col2 = st.columns(2)
         with col1:
-            params['width'] = st.number_input("Total Width (m)", min_value=0.1, value=3.0, step=0.1)
-            params['flange_width'] = st.number_input("Horizontal Flange Width (m)", min_value=0.1, value=1.0, step=0.1)
+            params['width'] = st.number_input("Total Width [L]", min_value=0.1, value=3.0, step=0.1)
+            params['flange_width'] = st.number_input("Horizontal Flange Width [L]", min_value=0.1, value=1.0, step=0.1)
         with col2:
-            params['height'] = st.number_input("Total Height (m)", min_value=0.1, value=3.0, step=0.1)
-            params['flange_height'] = st.number_input("Vertical Flange Height (m)", min_value=0.1, value=1.0, step=0.1)
+            params['height'] = st.number_input("Total Height [L]", min_value=0.1, value=3.0, step=0.1)
+            params['flange_height'] = st.number_input("Vertical Flange Height [L]", min_value=0.1, value=1.0, step=0.1)
 
     elif geometry_type == "plate_with_hole":
         col1, col2 = st.columns(2)
         with col1:
-            params['length'] = st.number_input("Plate Length (m)", min_value=0.1, value=4.0, step=0.1)
-            params['height'] = st.number_input("Plate Height (m)", min_value=0.1, value=2.0, step=0.1)
+            params['length'] = st.number_input("Plate Length [L]", min_value=0.1, value=4.0, step=0.1)
+            params['height'] = st.number_input("Plate Height [L]", min_value=0.1, value=2.0, step=0.1)
         with col2:
-            params['hole_x'] = st.number_input("Hole Center X (m)", min_value=0.0, value=2.0, step=0.1)
-            params['hole_y'] = st.number_input("Hole Center Y (m)", min_value=0.0, value=1.0, step=0.1)
-            params['hole_radius'] = st.number_input("Hole Radius (m)", min_value=0.01, value=0.3, step=0.05)
+            params['hole_x'] = st.number_input("Hole Center X [L]", min_value=0.0, value=2.0, step=0.1)
+            params['hole_y'] = st.number_input("Hole Center Y [L]", min_value=0.0, value=1.0, step=0.1)
+            params['hole_radius'] = st.number_input("Hole Radius [L]", min_value=0.01, value=0.3, step=0.05)
 
     return params
 
@@ -207,19 +207,19 @@ def create_material_inputs(geometry_type):
             with col1:
                 name = st.text_input(f"Name", value=f"layer_{i+1}", key=f"layer_name_{i}")
             with col2:
-                y_min = st.number_input(f"Y min (m)", value=float(i/num_layers), step=0.1, key=f"y_min_{i}", format="%.3f")
+                y_min = st.number_input(f"Y min [L]", value=float(i/num_layers), step=0.1, key=f"y_min_{i}", format="%.3f")
             with col3:
-                y_max = st.number_input(f"Y max (m)", value=float((i+1)/num_layers), step=0.1, key=f"y_max_{i}", format="%.3f")
+                y_max = st.number_input(f"Y max [L]", value=float((i+1)/num_layers), step=0.1, key=f"y_max_{i}", format="%.3f")
             with col4:
                 physical_id = st.number_input(f"Physical ID", value=i+1, step=1, key=f"phys_id_{i}")
 
             col1, col2, col3 = st.columns(3)
             with col1:
-                E = st.number_input(f"Young's Modulus (Pa)", value=1.0e6*(i+1), format="%.2e", key=f"E_{i}")
+                E = st.number_input(f"Young's Modulus [F/L²]", value=1.0e6*(i+1), format="%.2e", key=f"E_{i}")
             with col2:
                 nu = st.number_input(f"Poisson's Ratio", min_value=0.0, max_value=0.49, value=0.3, step=0.01, key=f"nu_{i}", format="%.3f")
             with col3:
-                density = st.number_input(f"Density (kg/m³)", value=0.0, min_value=0.0, format="%.2f", key=f"density_{i}",
+                density = st.number_input(f"Density [M/L³]", value=0.0, min_value=0.0, format="%.2f", key=f"density_{i}",
                                          help="Material density for body force calculation")
 
             materials.append({
@@ -236,11 +236,11 @@ def create_material_inputs(geometry_type):
         # Single material
         col1, col2, col3 = st.columns(3)
         with col1:
-            E = st.number_input("Young's Modulus (Pa)", value=2.1e11, format="%.2e")
+            E = st.number_input("Young's Modulus [F/L²]", value=2.1e11, format="%.2e")
         with col2:
             nu = st.number_input("Poisson's Ratio", min_value=0.0, max_value=0.49, value=0.3, step=0.01, format="%.3f")
         with col3:
-            density = st.number_input("Density (kg/m³)", value=0.0, min_value=0.0, format="%.2f",
+            density = st.number_input("Density [M/L³]", value=0.0, min_value=0.0, format="%.2f",
                                      help="Material density for body force calculation (0 = no body forces)")
 
         materials = {'E': E, 'nu': nu, 'density': density}
@@ -308,11 +308,11 @@ def create_load_inputs():
 
         with col2:
             physical_id = st.number_input("Physical ID", value=200+i, step=1, key=f"load_phys_id_{i}")
-            fx = st.number_input("Force X (N)", value=0.0, format="%.2f", key=f"load_fx_{i}")
+            fx = st.number_input("Force X [F]", value=0.0, format="%.2f", key=f"load_fx_{i}")
 
         with col3:
             st.write("")  # Spacer
-            fy = st.number_input("Force Y (N)", value=-1000.0, format="%.2f", key=f"load_fy_{i}")
+            fy = st.number_input("Force Y [F]", value=-1000.0, format="%.2f", key=f"load_fy_{i}")
 
         # Distribution type
         col1, col2, col3 = st.columns(3)
@@ -384,7 +384,7 @@ def create_mesh_inputs():
     col1, col2 = st.columns(2)
 
     with col1:
-        mesh_size = st.number_input("Mesh Size (m)", min_value=0.001, value=0.1, step=0.01, format="%.3f")
+        mesh_size = st.number_input("Mesh Size [L]", min_value=0.001, value=0.1, step=0.01, format="%.3f")
         element_type = st.selectbox("Element Type", ["triangle", "triangle6", "quad"], index=0)
 
     with col2:
@@ -412,10 +412,10 @@ def create_body_force_inputs():
 
         col1, col2 = st.columns(2)
         with col1:
-            grav_x = st.number_input("Gravity X (m/s²)", value=0.0, format="%.2f",
+            grav_x = st.number_input("Gravity X [L/T²]", value=0.0, format="%.2f",
                                     help="Horizontal acceleration (0 for standard gravity)")
         with col2:
-            grav_y = st.number_input("Gravity Y (m/s²)", value=-9.81, format="%.2f",
+            grav_y = st.number_input("Gravity Y [L/T²]", value=-9.81, format="%.2f",
                                     help="Vertical acceleration (-9.81 for Earth's gravity)")
 
         # Store in session state for solver
@@ -573,9 +573,9 @@ def run_solidspy_solver(nodes_array, elements_array, materials_array, loads_arra
     apply_body_forces : bool, optional
         Whether to apply body forces (gravity). Default: False
     grav_x : float, optional
-        Gravity acceleration in x-direction (m/s²). Default: 0.0
+        Gravity acceleration in x-direction [L/T²]. Default: 0.0
     grav_y : float, optional
-        Gravity acceleration in y-direction (m/s²). Default: -9.81
+        Gravity acceleration in y-direction [L/T²]. Default: -9.81
 
     Returns
     -------
@@ -955,7 +955,7 @@ def create_deformed_configuration_plot(nodes, elements, displacements, scale_fac
         intensity=disp_mag,
         colorscale='Plasma',
         colorbar=dict(
-            title=dict(text='Displacement<br>Magnitude (m)', side='right'),
+            title=dict(text='Displacement<br>Magnitude [L]', side='right'),
             tickformat='.2e',
             thickness=20,
             len=0.7
@@ -1248,15 +1248,15 @@ def create_principal_stress_trajectories_plot(nodes, elements, stresses, height=
         tau_xy = stresses[:, 2]
         mesh_intensity = np.sqrt(sigma_xx**2 - sigma_xx*sigma_yy + sigma_yy**2 + 3*tau_xy**2)
         title_text = "Principal Stress Trajectories (σ₁ and σ₂ - Perpendicular)"
-        color_title = "Von Mises (Pa)"
+        color_title = "Von Mises [F/L²]"
     elif show_mode == 'sigma_1':
         mesh_intensity = principal['sigma_1']
         title_text = "Principal Stress Trajectories (σ₁ - Maximum)"
-        color_title = "σ₁ (Pa)"
+        color_title = "σ₁ [F/L²]"
     else:  # sigma_2
         mesh_intensity = principal['sigma_2']
         title_text = "Principal Stress Trajectories (σ₂ - Minimum)"
-        color_title = "σ₂ (Pa)"
+        color_title = "σ₂ [F/L²]"
 
     # Create figure with mesh
     fig = go.Figure()
@@ -1458,10 +1458,9 @@ def display_solver_results(results):
         st.metric("Total Elements", len(results['elements']))
     with col2:
         st.metric("Total DOFs", results['neq'])
-        st.metric("Max Displacement", f"{results['max_displacement']:.3e} m")
+        st.metric("Max Displacement", f"{results['max_displacement']:.3e}")
     with col3:
-        st.metric("Max Stress", f"{results['max_stress']:.3e} Pa")
-        st.metric("Max Stress (MPa)", f"{results['max_stress']/1e6:.2f}")
+        st.metric("Max Stress", f"{results['max_stress']:.2e}")
 
     # Visualization
     st.markdown("---")
@@ -1493,7 +1492,7 @@ def display_solver_results(results):
                 fig = create_interactive_contour_plot(
                     nodes, elements, disp_mag,
                     "Displacement Magnitude",
-                    "Displacement (m)",
+                    "Displacement [L]",
                     height=700
                 )
                 st.plotly_chart(fig, use_container_width=True)
@@ -1502,7 +1501,7 @@ def display_solver_results(results):
                 fig = create_interactive_contour_plot(
                     nodes, elements, disp[:, 0],
                     "Horizontal Displacement (ux)",
-                    "ux (m)",
+                    "ux [L]",
                     height=700
                 )
                 st.plotly_chart(fig, use_container_width=True)
@@ -1511,7 +1510,7 @@ def display_solver_results(results):
                 fig = create_interactive_contour_plot(
                     nodes, elements, disp[:, 1],
                     "Vertical Displacement (uy)",
-                    "uy (m)",
+                    "uy [L]",
                     height=700
                 )
                 st.plotly_chart(fig, use_container_width=True)
@@ -1643,7 +1642,7 @@ def display_solver_results(results):
                     default_value = max_vm_stress_mpa * 0.7
 
                 threshold_mpa = st.slider(
-                    "Set Stress Limit (MPa)",
+                    "Set Stress Limit [F/L²]",
                     min_value=0.0,
                     max_value=float(slider_max),
                     value=float(default_value),
@@ -1720,7 +1719,7 @@ def display_solver_results(results):
                     fig = create_interactive_contour_plot(
                         nodes, elements, von_mises,
                         "Von Mises Stress",
-                        "σ (Pa)",
+                        "σ [F/L²]",
                         height=700
                     )
                     st.plotly_chart(fig, use_container_width=True)
@@ -1729,7 +1728,7 @@ def display_solver_results(results):
                 fig = create_interactive_contour_plot(
                     nodes, elements, sigma_xx,
                     "Normal Stress (σ-xx)",
-                    "σ-xx (Pa)",
+                    "σ-xx [F/L²]",
                     height=700
                 )
                 st.plotly_chart(fig, use_container_width=True)
@@ -1738,7 +1737,7 @@ def display_solver_results(results):
                 fig = create_interactive_contour_plot(
                     nodes, elements, sigma_yy,
                     "Normal Stress (σ-yy)",
-                    "σ-yy (Pa)",
+                    "σ-yy [F/L²]",
                     height=700
                 )
                 st.plotly_chart(fig, use_container_width=True)
@@ -1747,7 +1746,7 @@ def display_solver_results(results):
                 fig = create_interactive_contour_plot(
                     nodes, elements, tau_xy,
                     "Shear Stress (τ-xy)",
-                    "τ-xy (Pa)",
+                    "τ-xy [F/L²]",
                     height=700
                 )
                 st.plotly_chart(fig, use_container_width=True)
@@ -1812,7 +1811,7 @@ def display_solver_results(results):
                     default_value = max_s1_stress_mpa * 0.7
 
                 threshold_mpa_s1 = st.slider(
-                    "Set Stress Limit (MPa)",
+                    "Set Stress Limit [F/L²]",
                     min_value=0.0,
                     max_value=float(slider_max),
                     value=float(default_value),
@@ -1889,7 +1888,7 @@ def display_solver_results(results):
                     fig = create_interactive_contour_plot(
                         nodes, elements, sigma_1,
                         "Maximum Principal Stress (σ₁)",
-                        "σ₁ (Pa)",
+                        "σ₁ [F/L²]",
                         height=700
                     )
                     st.plotly_chart(fig, use_container_width=True)
@@ -1935,7 +1934,7 @@ def display_solver_results(results):
                     default_value = max_s2_stress_mpa * 0.7
 
                 threshold_mpa_s2 = st.slider(
-                    "Set Stress Limit (MPa)",
+                    "Set Stress Limit [F/L²]",
                     min_value=0.0,
                     max_value=float(slider_max),
                     value=float(default_value),
@@ -2012,7 +2011,7 @@ def display_solver_results(results):
                     fig = create_interactive_contour_plot(
                         nodes, elements, sigma_2,
                         "Minimum Principal Stress (σ₂)",
-                        "σ₂ (Pa)",
+                        "σ₂ [F/L²]",
                         height=700
                     )
                     st.plotly_chart(fig, use_container_width=True)
@@ -2051,7 +2050,7 @@ def display_solver_results(results):
                     default_value = max_tmax_stress_mpa * 0.7
 
                 threshold_mpa_tmax = st.slider(
-                    "Set Shear Strength Limit (MPa)",
+                    "Set Shear Strength Limit [F/L²]",
                     min_value=0.0,
                     max_value=float(slider_max),
                     value=float(default_value),
@@ -2128,7 +2127,7 @@ def display_solver_results(results):
                     fig = create_interactive_contour_plot(
                         nodes, elements, tau_max,
                         "Maximum Shear Stress (τmax)",
-                        "τmax (Pa)",
+                        "τmax [F/L²]",
                         height=700
                     )
                     st.plotly_chart(fig, use_container_width=True)
@@ -2207,15 +2206,15 @@ def display_solver_results(results):
 
             # Create DataFrame for better display
             import pandas as pd
-            reaction_df = pd.DataFrame(reactions, columns=['Node ID', 'Rx (N)', 'Ry (N)'])
+            reaction_df = pd.DataFrame(reactions, columns=['Node ID', 'Rx [F]', 'Ry [F]'])
             reaction_df['Node ID'] = reaction_df['Node ID'].astype(int)
-            reaction_df['Magnitude (N)'] = np.sqrt(reaction_df['Rx (N)']**2 + reaction_df['Ry (N)']**2)
+            reaction_df['Magnitude [F]'] = np.sqrt(reaction_df['Rx [F]']**2 + reaction_df['Ry [F]']**2)
 
             st.dataframe(
                 reaction_df.style.format({
-                    'Rx (N)': '{:.3e}',
-                    'Ry (N)': '{:.3e}',
-                    'Magnitude (N)': '{:.3e}'
+                    'Rx [F]': '{:.3e}',
+                    'Ry [F]': '{:.3e}',
+                    'Magnitude [F]': '{:.3e}'
                 }),
                 use_container_width=True
             )
@@ -2792,11 +2791,11 @@ def show_geo_loader():
                 st.markdown(f"**Physical Surface ID {pid}: {name if name else 'unnamed'}**")
                 col1, col2, col3 = st.columns(3)
                 with col1:
-                    E = st.number_input(f"Young's Modulus (Pa)", value=2.1e11, format="%.2e", key=f"E_{pid}")
+                    E = st.number_input(f"Young's Modulus [F/L²]", value=2.1e11, format="%.2e", key=f"E_{pid}")
                 with col2:
                     nu = st.number_input(f"Poisson's Ratio", min_value=0.0, max_value=0.49, value=0.3, step=0.01, format="%.3f", key=f"nu_{pid}")
                 with col3:
-                    density = st.number_input(f"Density (kg/m³)", value=0.0, min_value=0.0, format="%.2f", key=f"density_{pid}",
+                    density = st.number_input(f"Density [M/L³]", value=0.0, min_value=0.0, format="%.2f", key=f"density_{pid}",
                                              help="Material density for body forces")
 
                 materials.append({
@@ -2853,10 +2852,10 @@ def show_geo_loader():
                 load_phys_id = st.number_input("Physical Line ID", min_value=1, value=200+i, step=1, key=f"load_phys_geo_{i}")
 
             with col2:
-                fx = st.number_input("Force X (N)", value=0.0, format="%.2f", key=f"load_fx_geo_{i}")
+                fx = st.number_input("Force X [F]", value=0.0, format="%.2f", key=f"load_fx_geo_{i}")
 
             with col3:
-                fy = st.number_input("Force Y (N)", value=-1000.0, format="%.2f", key=f"load_fy_geo_{i}")
+                fy = st.number_input("Force Y [F]", value=-1000.0, format="%.2f", key=f"load_fy_geo_{i}")
 
             # Distribution type
             col1, col2, col3 = st.columns(3)
@@ -2922,7 +2921,7 @@ def show_geo_loader():
 
         col1, col2 = st.columns(2)
         with col1:
-            mesh_size = st.number_input("Mesh Size (m)", min_value=0.001, value=0.1, step=0.01, format="%.3f")
+            mesh_size = st.number_input("Mesh Size [L]", min_value=0.001, value=0.1, step=0.01, format="%.3f")
         with col2:
             element_type = st.selectbox(
                 "Element Type",
