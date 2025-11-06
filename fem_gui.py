@@ -314,13 +314,64 @@ def create_load_inputs():
             st.write("")  # Spacer
             fy = st.number_input("Force Y (N)", value=-1000.0, format="%.2f", key=f"load_fy_{i}")
 
-        loads.append({
+        # Distribution type
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            distribution = st.selectbox(
+                "Distribution",
+                options=["uniform", "linear"],
+                index=0,
+                key=f"load_dist_{i}",
+                help="Uniform: constant load. Linear: varies from 0 to max (hydrostatic pressure, etc.)"
+            )
+
+        with col2:
+            if distribution == "linear":
+                direction = st.selectbox(
+                    "Varies With",
+                    options=["vertical", "horizontal"],
+                    index=0,
+                    key=f"load_dir_{i}",
+                    help="Which coordinate the load magnitude varies with: Y-coordinate (vertical) or X-coordinate (horizontal)"
+                )
+            else:
+                direction = None
+
+        with col3:
+            if distribution == "linear":
+                variation_start = st.selectbox(
+                    "Max Load At",
+                    options=["min", "max"],
+                    index=0,
+                    key=f"load_varstart_{i}",
+                    help="Where maximum load occurs: 'min' = at minimum coord, 'max' = at maximum coord"
+                )
+            else:
+                variation_start = "min"
+
+        if distribution == "linear":
+            st.info("💡 **Linear Load Distribution**\n"
+                   "- **Varies With**: Which coordinate controls load magnitude (X or Y)\n"
+                   "- **Max Load At 'min'**: Load = P_max at minimum coordinate, 0 at maximum\n"
+                   "- **Max Load At 'max'**: Load = 0 at minimum coordinate, P_max at maximum\n\n"
+                   "**Example - Hydrostatic on dam (Y=0 at bottom, Y=H at top):**\n"
+                   "Force X = -P_max, Varies With = 'vertical', Max Load At = 'min' (bottom = min Y)")
+
+        load_dict = {
             'name': name,
             'location': location,
             'physical_id': physical_id,
             'force': {'x': fx, 'y': fy},
-            'distribution': 'uniform'
-        })
+            'distribution': distribution
+        }
+
+        if direction:
+            load_dict['direction'] = direction
+
+        if distribution == "linear":
+            load_dict['variation_start'] = variation_start
+
+        loads.append(load_dict)
         st.divider()
 
     return loads
@@ -2807,12 +2858,63 @@ def show_geo_loader():
             with col3:
                 fy = st.number_input("Force Y (N)", value=-1000.0, format="%.2f", key=f"load_fy_geo_{i}")
 
-            loads.append({
+            # Distribution type
+            col1, col2, col3 = st.columns(3)
+            with col1:
+                distribution = st.selectbox(
+                    "Distribution",
+                    options=["uniform", "linear"],
+                    index=0,
+                    key=f"load_dist_geo_{i}",
+                    help="Uniform: constant load along line. Linear: varies from 0 to max (e.g., hydrostatic)"
+                )
+
+            with col2:
+                if distribution == "linear":
+                    direction = st.selectbox(
+                        "Varies With",
+                        options=["vertical", "horizontal"],
+                        index=0,
+                        key=f"load_dir_geo_{i}",
+                        help="Which coordinate the load magnitude varies with: Y-coordinate (vertical) or X-coordinate (horizontal)"
+                    )
+                else:
+                    direction = None
+
+            with col3:
+                if distribution == "linear":
+                    variation_start = st.selectbox(
+                        "Max Load At",
+                        options=["min", "max"],
+                        index=0,
+                        key=f"load_varstart_geo_{i}",
+                        help="Where maximum load occurs: 'min' = at minimum coord, 'max' = at maximum coord"
+                    )
+                else:
+                    variation_start = "min"
+
+            if distribution == "linear":
+                st.info("💡 **Linear Load Distribution**\n"
+                       "- **Varies With**: Which coordinate controls load magnitude (X or Y)\n"
+                       "- **Max Load At 'min'**: Load = P_max at minimum coordinate, 0 at maximum\n"
+                       "- **Max Load At 'max'**: Load = 0 at minimum coordinate, P_max at maximum\n\n"
+                       "**Example - Hydrostatic on dam (Y=0 at bottom, Y=H at top):**\n"
+                       "Force X = -P_max, Varies With = 'vertical', Max Load At = 'min' (bottom = min Y)")
+
+            load_dict = {
                 'name': load_name,
                 'physical_id': int(load_phys_id),
                 'force': {'x': fx, 'y': fy},
-                'distribution': 'uniform'
-            })
+                'distribution': distribution
+            }
+
+            if direction:
+                load_dict['direction'] = direction
+
+            if distribution == "linear":
+                load_dict['variation_start'] = variation_start
+
+            loads.append(load_dict)
             st.divider()
 
         # Mesh settings
@@ -2946,11 +3048,18 @@ def show_geo_loader():
                             if loads:
                                 loads_list = []
                                 for load in loads:
+                                    # Extract distribution parameters
+                                    distribution = load.get('distribution', 'uniform')
+                                    direction = load.get('direction', None)
+
                                     load_array = msh_proc.loading(
                                         cells, cell_data,
                                         load['physical_id'],
                                         load['force']['x'],
-                                        load['force']['y']
+                                        load['force']['y'],
+                                        distribution=distribution,
+                                        direction=direction,
+                                        nodes_array=nodes_array
                                     )
                                     loads_list.append(load_array)
 

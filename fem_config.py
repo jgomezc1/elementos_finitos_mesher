@@ -138,8 +138,25 @@ class Load(BaseModel):
         description="Location: 'left', 'right', 'top', 'bottom' or [x1,y1,x2,y2] for line"
     )
     physical_id: int = Field(..., ge=1, description="Physical line ID")
-    force: Force = Field(..., description="Total force on the line")
-    distribution: Literal["uniform"] = "uniform"
+    force: Force = Field(..., description="Total force on the line (or max value for linear)")
+    distribution: Literal["uniform", "linear"] = "uniform"
+    direction: Optional[Literal["horizontal", "vertical"]] = Field(
+        None,
+        description="Direction of variation for linear loads (horizontal=varies with x, vertical=varies with y)"
+    )
+    variation_start: Optional[Literal["min", "max"]] = Field(
+        "min",
+        description="Where maximum load occurs: 'min'=at minimum coord (bottom/left), 'max'=at maximum coord (top/right)"
+    )
+
+    @validator('direction')
+    def validate_direction_for_linear(cls, v, values):
+        """Ensure direction is specified for linear loads"""
+        if values.get('distribution') == 'linear' and v is None:
+            raise ValueError('direction must be specified for linear load distribution')
+        if values.get('distribution') == 'uniform' and v is not None:
+            raise ValueError('direction should only be specified for linear load distribution')
+        return v
 
     class Config:
         extra = "forbid"

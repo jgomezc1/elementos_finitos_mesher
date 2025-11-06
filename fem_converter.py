@@ -187,7 +187,11 @@ class FEMConverter:
                     cells, cell_data,
                     load.physical_id,
                     load.force.x,
-                    load.force.y
+                    load.force.y,
+                    distribution=load.distribution,
+                    direction=load.direction,
+                    nodes_array=nodes_array,
+                    variation_start=load.variation_start if load.distribution == 'linear' else 'min'
                 )
                 loads_list.append(load_array)
 

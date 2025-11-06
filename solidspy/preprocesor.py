@@ -221,8 +221,8 @@ def boundary_conditions(cells, cell_data, phy_lin, nodes_array, bc_x, bc_y):
     return nodes_array
 
 
-def loading(cells, cell_data, phy_lin, P_x, P_y):
-    """Impose nodal boundary conditions as required by SolidsPy
+def loading(cells, cell_data, phy_lin, P_x, P_y, distribution='uniform', direction=None, nodes_array=None, variation_start='min'):
+    """Impose nodal loads as required by SolidsPy
 
     Parameters
     ----------
@@ -232,20 +232,52 @@ def loading(cells, cell_data, phy_lin, P_x, P_y):
         cell_data: dictionary
             Dictionary created by meshio with cells data information.
         phy_lin : int
-            Physical line where BCs are to be imposed.
-        nodes_array : int
-            Array with the nodal data and to be modified by BCs.
+            Physical line where loads are to be applied.
         P_x, P_y : float
-            Load components in x and y directions.
+            Load components in x and y directions (total for uniform, max for linear).
+        distribution : str, optional
+            Load distribution type: 'uniform' or 'linear'. Default: 'uniform'.
+        direction : str, optional
+            Direction of variation for linear loads: 'horizontal' (varies with x)
+            or 'vertical' (varies with y). Required for linear distribution.
+        nodes_array : ndarray, optional
+            Array with nodal coordinates. Required for linear distribution.
+        variation_start : str, optional
+            Where the MAXIMUM load occurs: 'min' (at minimum coordinate) or 'max' (at maximum coordinate).
+            Default: 'min'.
+            For hydrostatic pressure on dam (Y=0 at bottom): use 'min' (max pressure at min Y = bottom).
 
     Returns
     -------
-        nodes_array : int
-            Array with the nodal data after imposing BCs according
-            to SolidsPy.
+        cargas : ndarray
+            Array with nodal loads in SolidsPy format [node_id, fx, fy].
+
+    Notes
+    -----
+    For linear distribution:
+    - Load varies linearly from 0 at one end to P_max at the other
+    - Total resultant force = 0.5 * P_max * length (triangular distribution)
+    - variation_start controls which end has the maximum load
+
+    Examples
+    --------
+    >>> # Uniform load
+    >>> loads = loading(cells, cell_data, phy_lin=100, P_x=0, P_y=-1000)
+
+    >>> # Hydrostatic pressure (max at bottom = min Y)
+    >>> loads = loading(cells, cell_data, phy_lin=100, P_x=-98100, P_y=0,
+    ...                 distribution='linear', direction='vertical',
+    ...                 variation_start='min', nodes_array=nodes)
 
     """
-    # Handle cell_data format
+    # Validate inputs for linear distribution
+    if distribution == 'linear':
+        if direction is None:
+            raise ValueError("direction must be specified for linear load distribution")
+        if nodes_array is None:
+            raise ValueError("nodes_array must be provided for linear load distribution")
+
+    # Handle cell_data format to get nodes on the physical line
     if isinstance(cells, list):
         # New meshio format - search through ALL line blocks
         nodes_carga = []
@@ -278,8 +310,99 @@ def loading(cells, cell_data, phy_lin, P_x, P_y):
     ncargas = len(nodes_carga)
     cargas = np.zeros((ncargas, 3))
     cargas[:, 0] = nodes_carga
-    cargas[:, 1] = P_x/ncargas
-    cargas[:, 2] = P_y/ncargas
+
+    if distribution == 'uniform':
+        # Uniform distribution: divide total load equally
+        cargas[:, 1] = P_x/ncargas
+        cargas[:, 2] = P_y/ncargas
+
+    elif distribution == 'linear':
+        # Linear distribution: load varies from 0 to P_max
+        # The loads (P_x and P_y) can vary with either X or Y coordinate position
+        # Get node coordinates
+        node_coords = nodes_array[nodes_carga, 1:3]  # [x, y] coordinates
+
+        if direction == 'vertical':
+            # Load magnitude varies with y-coordinate (e.g., hydrostatic pressure on vertical wall)
+            # The load can be in X direction (pushing into wall) or Y direction (friction)
+            y_coords = node_coords[:, 1]
+            y_min = y_coords.min()
+            y_max = y_coords.max()
+            y_range = y_max - y_min
+
+            if y_range < 1e-10:
+                # Check if there's variation in X instead
+                x_coords = node_coords[:, 0]
+                x_range = x_coords.max() - x_coords.min()
+                if x_range > 1e-10:
+                    st_warning = (f"Warning: Line is nearly horizontal (y-range={y_range:.2e}m). "
+                                 f"Consider using direction='horizontal' for better results.")
+                    print(st_warning)
+                    # Still allow it to proceed with small y variation
+                    y_range = max(y_range, 1e-10)
+                else:
+                    raise ValueError(f"Cannot apply varying load on point (both x-range and y-range are zero)")
+
+            # Normalize coordinates: normalized_coord = (Y - Y_min) / (Y_max - Y_min)
+            # This gives: 0 at Y_min, 1 at Y_max
+            normalized_coord = (y_coords - y_min) / y_range
+
+            # variation_start controls where MAXIMUM load occurs:
+            # - 'min': max load at minimum Y coordinate → reverse (1 at Y_min, 0 at Y_max)
+            # - 'max': max load at maximum Y coordinate → don't reverse (0 at Y_min, 1 at Y_max)
+            # For hydrostatic (Y=0 at bottom, Y=H at top): want max at bottom (Y_min), so use 'min'
+            if variation_start == 'min':
+                normalized_coord = 1.0 - normalized_coord
+
+        elif direction == 'horizontal':
+            # Load magnitude varies with x-coordinate (e.g., varying wind load)
+            # The load can be in X direction or Y direction
+            x_coords = node_coords[:, 0]
+            x_min = x_coords.min()
+            x_max = x_coords.max()
+            x_range = x_max - x_min
+
+            if x_range < 1e-10:
+                # Check if there's variation in Y instead
+                y_coords = node_coords[:, 1]
+                y_range = y_coords.max() - y_coords.min()
+                if y_range > 1e-10:
+                    st_warning = (f"Warning: Line is nearly vertical (x-range={x_range:.2e}m). "
+                                 f"Consider using direction='vertical' for better results.")
+                    print(st_warning)
+                    # Still allow it to proceed with small x variation
+                    x_range = max(x_range, 1e-10)
+                else:
+                    raise ValueError(f"Cannot apply varying load on point (both x-range and y-range are zero)")
+
+            # Normalize coordinates: normalized_coord = (X - X_min) / (X_max - X_min)
+            # This gives: 0 at X_min, 1 at X_max
+            normalized_coord = (x_coords - x_min) / x_range
+
+            # variation_start controls where MAXIMUM load occurs:
+            # - 'min': max load at minimum X coordinate → reverse (1 at X_min, 0 at X_max)
+            # - 'max': max load at maximum X coordinate → don't reverse (0 at X_min, 1 at X_max)
+            if variation_start == 'min':
+                normalized_coord = 1.0 - normalized_coord
+
+        else:
+            raise ValueError(f"Invalid direction: {direction}. Must be 'horizontal' or 'vertical'")
+
+        # Calculate load at each node (linearly varying)
+        # Both P_x and P_y vary with the same pattern (normalized_coord)
+        # normalized_coord ranges from 0 to 1 based on position and variation_start setting
+        #
+        # For triangular load distribution:
+        # - If variation_start='min': load = P_max at min coord, 0 at max coord (e.g., hydrostatic on dam)
+        # - If variation_start='max': load = 0 at min coord, P_max at max coord
+        #
+        # Total resultant = 0.5 * P_max * length
+        cargas[:, 1] = P_x * normalized_coord / ncargas
+        cargas[:, 2] = P_y * normalized_coord / ncargas
+
+    else:
+        raise ValueError(f"Invalid distribution type: {distribution}. Must be 'uniform' or 'linear'")
+
     return cargas
 
 
