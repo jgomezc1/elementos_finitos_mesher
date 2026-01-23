@@ -32,7 +32,7 @@ def eqcounter(nodes):
 
     """
     nnodes = nodes.shape[0]
-    IBC = np.zeros([nnodes, 2], dtype=np.integer)
+    IBC = np.zeros([nnodes, 2], dtype=int)
     for i in range(nnodes):
         for k in range(2):
             IBC[i , k] = int(nodes[i , k+3])
@@ -68,8 +68,8 @@ def DME(nodes, elements):
 
     """
     nels = elements.shape[0]
-    IELCON = np.zeros([nels, 9], dtype=np.integer)
-    DME = np.zeros([nels, 18], dtype=np.integer)
+    IELCON = np.zeros([nels, 9], dtype=int)
+    DME = np.zeros([nels, 18], dtype=int)
 
     neq, IBC = eqcounter(nodes)
 
@@ -106,7 +106,7 @@ def retriever(elements , mats , nodes , i, uel=None):
     ndof : int.
       Number of degrees of fredom of the current element.
     """
-    IELCON = np.zeros([9], dtype=np.integer)
+    IELCON = np.zeros([9], dtype=int)
     iet = elements[i, 1]
     ndof, nnodes, ngpts = fem.eletype(iet)
     elcoor = np.zeros([nnodes, 2])
